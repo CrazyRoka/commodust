@@ -1,8 +1,7 @@
 # Bitmap Modes
 
-The VIC-II supports two bitmap display modes that provide pixel-level
-graphics control. In bitmap mode, the screen is divided into 320×200
-(standard) or 160×200 (multicolor) individually addressable pixels.
+The VIC-II supports two bitmap display modes. In bitmap mode, the screen is divided into 320×200 (standard) or 160×200 (multicolor) pixels. The video matrix is used for color information.
+
 
 ## Mode Selection
 
@@ -14,7 +13,9 @@ graphics control. In bitmap mode, the screen is divided into 320×200
 
 **Enable bitmap mode:** Set bit 5 of $D011 (`POKE 53265, PEEK(53265) OR 32`).
 
-## Standard Bitmap Mode
+## Standard Bitmap Mode (ECM/BMM/MCM = 0/1/0)
+
+Every bit in the bitmap directly corresponds to one pixel. Foreground and background colors can be set for every 8×8 block.
 
 ### Resolution
 
@@ -173,6 +174,39 @@ matrix, not Color RAM. The emulator must read from the video matrix address
 In multicolor bitmap mode, three color sources are mixed: $D021, video
 matrix nybbles, and Color RAM nybbles. The emulator must correctly route
 each bit-pair to its color source.
+
+
+### C-Access Address (Video Matrix)
+| Bit | 13 | 12 | 11 | 10 | 9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Value | VM13 | VM12 | VM11 | VM10 | VC9 | VC8 | VC7 | VC6 | VC5 | VC4 | VC3 | VC2 | VC1 | VC0 |
+
+**Data:** 12 bits. D7-D4 = Color of `1` pixels, D3-D0 = Color of `0` pixels. (D11-D8 unused).
+
+### G-Access Address (Bitmap Data)
+| Bit | 13 | 12 | 11 | 10 | 9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Value | CB13 | VC9 | VC8 | VC7 | VC6 | VC5 | VC4 | VC3 | VC2 | VC1 | VC0 | RC2 | RC1 | RC0 |
+
+**Data:** 8 bits (1 bit/pixel). `0` = Color from bits 0-3 of c-access, `1` = Color from bits 4-7 of c-access.
+
+## Multicolor Bitmap Mode (ECM/BMM/MCM = 0/1/1)
+
+Combines two adjacent bits to form one pixel, reducing resolution to 160×200.
+
+### C-Access Address
+Same as Standard Bitmap Mode.
+**Data:** 12 bits. D11-D8 = Color of `11` pixels, D7-D4 = Color of `01` pixels, D3-D0 = Color of `10` pixels.
+
+### G-Access Address
+Same as Standard Bitmap Mode.
+**Data:** 4 pixels (2 bits/pixel).
+- `00`: Background 0 ($D021)
+- `01`: Color from bits 4-7 of c-access
+- `10`: Color from bits 0-3 of c-access
+- `11`: Color from bits 8-11 of c-access
+
+*Note: The `01` bit-pair is treated as background for sprite priority and collision detection.*
 
 ### Conceptual Considerations for Emulation
 

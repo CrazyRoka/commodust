@@ -25,12 +25,21 @@
 
 # VIC-II Video Chip
 - [VIC-II Overview](./vic2/overview.md)
+- [Pinout and Signals](./vic2/pinout.md)
 - [Register Reference](./vic2/registers.md)
 - [VIC-II Memory Addressing and Banking](./vic2/memory_addressing.md)
+- [Internal Registers and Counters](./vic2/internal_registers.md)
+- [Raster Line Timing and Memory Access](./vic2/timing_and_accesses.md)
+- [Bad Lines and Bus Arbitration](./vic2/bad_lines.md)
+- [Display Generation and Border Unit](./vic2/border_unit.md)
 - [Text Modes](./vic2/text_modes.md)
 - [Bitmap Modes](./vic2/bitmap_modes.md)
+- [Invalid Graphics Modes](./vic2/invalid_modes.md)
 - [Sprite Graphics](./vic2/sprites.md)
 - [Raster Interrupts](./vic2/raster_interrupts.md)
+- [Light Pen](./vic2/lightpen.md)
+- [DRAM Refresh](./vic2/dram_refresh.md)
+- [Known Effects and Quirks](./vic2/effects.md)
 
 # SID Sound Chip
 - [SID Overview](./sid/overview.md)

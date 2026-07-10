@@ -4,9 +4,10 @@
 
 The Commodore 64 is built around a shared address/data bus connecting
 the 6510 CPU to 64 KB of DRAM, multiple ROMs, and several custom
-integrated circuits. The key architectural feature is that the CPU and
-the VIC-II video chip **share access** to the same physical RAM, but
-they do not always see the same things at the same addresses.
+integrated circuits. The VIC-II acts as the bus master, generating
+the system clock (ø2), DRAM RAS/CAS signals, and controlling bus
+arbitration via the BA (Bus Available) and AEC (Address Enable Control)
+lines.
 
 ```
          ┌──────────┐
@@ -58,6 +59,14 @@ memory-mapped I/O. The mapping is determined by a combination of:
    from cartridges.
 3. **PLA (Programmable Logic Array)** — combines the above signals to
    select which device responds to a given address range.
+
+## Open Bus Behavior
+
+The PLA does not fully decode all address ranges. Unconnected address ranges exhibit specific open-bus behavior:
+
+- **$DE00–$DFFF (I/O Expansion):** A read from these unconnected addresses does not return random data. On many C64s, the data bus retains the last byte read by the VIC-II during the first phase of the clock cycle. This allows software to measure VIC-II timing by reading the $DE00 area.
+- **$D800–$DBFF (Color RAM Upper Nybble):** The Color RAM is only 4 bits wide. The upper 4 bits are open. Similar to the $DE00 area, they often read back the upper bits of the last byte the VIC-II fetched.
+- **RAM under I/O Port ($00–$01):** The 6510 I/O port overlays physical RAM at $00–$01. When the CPU writes to $00 or $01, the data bus drivers for the internal I/O port go into tri-state, but the R/W line is set low. If the VIC-II reads the desired value from RAM $00 or $01 during the first clock phase, the CPU's write cycle in the second phase will successfully write that value to the underlying physical RAM.
 
 ### Default Power-On Memory Configuration
 

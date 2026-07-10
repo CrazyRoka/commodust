@@ -143,7 +143,7 @@ This register is dual-function:
 | 0–2 | $07 | 0 | Horizontal fine scroll offset (0–7) |
 | 3 | $08 | 1 | Columns: 1 = 40 columns, 0 = 38 columns |
 | 4 | $10 | 0 | Multicolor mode: 1 = enabled |
-| 5 | $20 | 0 | VIC reset: 0 = normal, 1 = video completely off |
+| 5 | $20 | 0 | Reset (RES): No function on 6567/6569. On the 6566, stops the VIC. |
 | 6–7 | $C0 | 0 | Unused |
 
 ### Bit 3 — 38/40 Column Select
@@ -159,8 +159,7 @@ resolution). In bitmap mode: enables multicolor bitmap mode. See
 
 ### Bit 5 — VIC Reset
 
-Setting to 1 completely stops the VIC-II. On older C64s, the screen
-goes black. Should always be 0 for normal operation.
+On the VIC-II 6567/6569 used in the C64, this bit has no function. On the rarely used 6566 variant (designed for static RAM), setting this bit to 1 completely stops the VIC. Should always be 0 for normal operation.
 
 ## Register $D018 — Memory Control Register
 

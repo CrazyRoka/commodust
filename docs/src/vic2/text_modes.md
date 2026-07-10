@@ -1,8 +1,6 @@
 # Text Modes
 
-The VIC-II supports three text (character) display modes. All use the video
-matrix (1K of screen codes) and character dot-data (2K of shape data) to
-generate the display.
+The VIC-II supports three text (character) display modes. All use the video matrix (1K of screen codes) and character dot-data (2K of shape data) to generate the display.
 
 ## Mode Selection
 
@@ -11,12 +9,14 @@ generate the display.
 | Standard text | 0 | 0 | 256 characters, 16 fg colors + 1 bg |
 | Multicolor text | 0 | 1 | 256 chars, 4 colors per char (half horizontal res) |
 | Extended bg color | 1 | 0 | 64 characters, 4 bg colors |
-| Invalid | 1 | 1 | Undefined behavior on real hardware |
+| Invalid | 1 | 1 | Undefined behavior (black pixels, but sequencer active) |
 
 **Default:** Standard text mode ($D011 = $9B → bit 6 = 0; $D016 = $08 →
 bit 4 = 0).
 
-## Standard Text Mode
+## Standard Text Mode (ECM/BMM/MCM = 0/0/0)
+
+In standard text mode, every bit in the character generator directly corresponds to one pixel. The foreground color is given by the color nybble from the video matrix; the background is $D021.
 
 ### Display Structure
 
@@ -189,3 +189,58 @@ current mode bits and apply the correct color mapping.
 
 For cycle-accurate emulation, the character data fetch must be interleaved
 with CPU execution, as bad lines steal cycles from the CPU.
+
+## Exact Address Generation
+
+### C-Access Address (Video Matrix)
+The address for reading the video matrix is always constructed using the VM bits from $D018 and the internal VC counter.
+
+| Bit | 13 | 12 | 11 | 10 | 9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Value | VM13 | VM12 | VM11 | VM10 | VC9 | VC8 | VC7 | VC6 | VC5 | VC4 | VC3 | VC2 | VC1 | VC0 |
+
+**Data:** 12 bits. D7-D0 from RAM (Character Pointer), D11-D8 from Color RAM (Foreground Color).
+
+### G-Access Address (Character Data)
+In Standard Text Mode, the address is formed by the CB bits, the character pointer (D7-D0), and the RC counter.
+
+| Bit | 13 | 12 | 11 | 10 | 9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Value | CB13 | CB12 | CB11 | D7 | D6 | D5 | D4 | D3 | D2 | D1 | D0 | RC2 | RC1 | RC0 |
+
+**Data:** 8 bits (1 bit/pixel). `0` = Background ($D021), `1` = Foreground (from c-access bits 8-11).
+
+## Multicolor Text Mode (ECM/BMM/MCM = 0/0/1)
+
+Allows 4-colored characters at the cost of horizontal resolution. If bit 11 of the c-access data is 0, the character is displayed in standard mode. If bit 11 is 1, bits are grouped in pairs (2 bits/pixel).
+
+### C-Access Address
+Same as Standard Text Mode.
+**Data:** 12 bits. D11 = MC flag, D10-D8 = Color of `11` pixels, D7-D0 = Character Pointer.
+
+### G-Access Address
+Same as Standard Text Mode.
+**Data (MC flag = 1):** 4 pixels (2 bits/pixel).
+- `00`: Background 0 ($D021)
+- `01`: Background 1 ($D022)
+- `10`: Background 2 ($D023)
+- `11`: Color from bits 8-10 of c-access data
+
+*Note: The `01` bit-pair is treated as background for sprite priority and collision detection.*
+
+## Extended Background Color Mode (ECM/BMM/MCM = 1/0/0)
+
+Allows selection of one of four background colors for every character via the upper two bits of the character pointer, reducing the character set to 64.
+
+### C-Access Address
+Same as Standard Text Mode.
+**Data:** 12 bits. D11-D8 = Foreground color, D7-D6 = Background color selection, D5-D0 = Character Pointer.
+
+### G-Access Address
+| Bit | 13 | 12 | 11 | 10 | 9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Value | CB13 | CB12 | CB11 | 0 | 0 | D5 | D4 | D3 | D2 | D1 | D0 | RC2 | RC1 | RC0 |
+
+*Note: Address bits 9 and 10 are forced low because of the ECM bit.*
+
+**Data:** 8 bits (1 bit/pixel). `0` = Background selected by D7-D6 of c-access, `1` = Foreground.

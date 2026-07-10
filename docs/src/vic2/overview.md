@@ -95,6 +95,57 @@ approximately **7% faster** than with display enabled.
 
 *Bit 6 of $D011, not bit 5, enables extended background color mode.
 
+## Internal Architecture Conceptual Model
+
+The VIC-II is not a monolithic state machine; it consists of independently working function units. The memory interface (which generates addresses and fetches data) is separate from the display sequencer (which converts fetched data into pixels). A 40×12 bit video matrix/color line buffer decouples these two units.
+
+```text
+            +---------------+ 
+            |Refresh counter| 
+            +---------------+ 
+        +-+    |               
+  A     |M|    v               
+  d     |e|   +-+    +--------------+ 
+  d     |m|   |A|    |Raster counter|->| VC/RC | 
+  r     |o|   |d| +->|      X/Y     |  +-------+ 
+  . <==>|r|   |r| |  +--------------+      |     
+  +     |y|   |.|<--------+----------------+     
+  d     | |   |g|===========================>|40×12 bit video matrix-/
+  a     |i|   |e| |     |   |                |       color line      
+  t     |n|<=>|n| |     |   |                +----------------------- 
+  a     |t|   |e| |     |   |                            ||          
+        |e|   |r| |     |   | +----------------+         ||          
+        |r|   |a|============>|8×24 bit sprite |         ||          
+        |f|   |t|<----+ |   | |  data buffers  |         ||          
+        |a|   |o| |   | v   | +----------------+         ||          
+        |c|   |r| | +-----+ |         ||                 ||          
+        |e|   +-+ | |MC0-7| |         \/                 \/          
+                  | +-----+ |  +--------------+   +--------------+    
+                  |         |  | Sprite data  |   |Graphics data |    
+        +---------------+   |  |  sequencer   |   |  sequencer   |    
+ RAS <--|               |   |  +--------------+   +--------------+    
+ CAS <--|Clock generator|   |              |         |                
+ ø0  <--|               |   |              v         v                
+        +---------------+   |       +-----------------------+         
+                ^           |       |          MUX          |         
+                |           |       | Sprite priorities and |--------+
+ øIN -----------+           |       |  collision detection  |         
+                            |       +-----------------------+         
+   VC: Video Matrix Counter |                   |                     
+   RC: Row Counter          |                   v                     
+                            +----------->| Border unit |              
+                            |            +-------------+              
+   MC: MOB Data Counter     |                   |                     
+                            v                   v                     
+                    +----------------+  +----------------+             
+                    |Sync generation |  |Color generation|<-------- øCOLOR
+                    +----------------+  +----------------+             
+                                   |      |                             
+                                   v      v                             
+                                 Video output                          
+                               (S/LUM and COLOR)                        
+```
+
 ## Graphics Systems
 
 The VIC-II provides three independent graphics systems that can
@@ -112,3 +163,11 @@ partially coexist:
    effects, and scrolling zones.
 
 See the individual sections for detailed documentation of each system.
+
+### Conceptual Considerations for Emulation (Rust)
+
+In a Rust emulator, this decoupled architecture suggests a clear separation of concerns in the `VicIi` struct to satisfy borrow checker constraints and model hardware accurately:
+
+1. **Memory Fetch Frontend:** A method responsible for cycle-by-cycle bus arbitration and address generation (evaluating `VC`, `RC`, `MC` against the raster cycle). This unit writes into the internal `video_matrix_line` and `sprite_data_buffers`. It owns the bus access state.
+2. **Display Backend:** A renderer that reads from these internal buffers and the border/color registers to produce pixels. The renderer operates with a fixed delay relative to the fetch frontend.
+3. **State Isolation:** The frontend and backend should not share mutable state directly beyond the buffers; this prevents borrow checker conflicts (e.g., trying to read a register while the fetch unit is writing to the bus) and accurately models the hardware's asynchronous decoupling.
