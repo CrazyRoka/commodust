@@ -4,7 +4,7 @@ pub enum BusOperation {
     Write(u16, u8),
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum AddressingMode {
     Implied,
     Accumulator,
@@ -26,7 +26,7 @@ enum AddressModeProcessingResult {
     Finished,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Instruction {
     Ora,
 }
@@ -52,6 +52,7 @@ pub struct Mos6510 {
     instruction: Instruction,
     addressing_mode: AddressingMode,
     value_latch: u8,
+    addr_latch: u16,
 }
 
 impl Mos6510 {
@@ -67,6 +68,7 @@ impl Mos6510 {
             instruction: Instruction::Ora,
             addressing_mode: AddressingMode::Immediate,
             value_latch: 0,
+            addr_latch: 0,
         }
     }
 
@@ -79,8 +81,7 @@ impl Mos6510 {
         }
 
         if self.cycle == 1 {
-            self.instruction = Instruction::Ora;
-            self.addressing_mode = AddressingMode::Immediate;
+            self.decode_instruction(data_in);
         }
 
         if let AddressModeProcessingResult::Operation(operation) = self.step_addressing(data_in) {
@@ -113,7 +114,34 @@ impl Mos6510 {
             AddressingMode::ZeroPage => todo!(),
             AddressingMode::ZeroPageX => todo!(),
             AddressingMode::ZeroPageY => todo!(),
-            AddressingMode::Absolute => todo!(),
+            AddressingMode::Absolute => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                3 => {
+                    self.cycle = 4;
+                    self.addr_latch |= (data_in as u16) << 8;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                4 => {
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => panic!(
+                    "Unexpected cycle for Immediate addressing mode {}",
+                    self.cycle
+                ),
+            },
             AddressingMode::AbsoluteX => todo!(),
             AddressingMode::AbsoluteY => todo!(),
             AddressingMode::Indirect => todo!(),
@@ -139,9 +167,26 @@ impl Mos6510 {
                 }
                 self.cycle = 0;
                 self.value_latch = 0;
+                self.addr_latch = 0;
                 self.step(0xFF)
             }
         }
+    }
+
+    fn decode_instruction(&mut self, opcode: u8) {
+        (self.instruction, self.addressing_mode) = match opcode & 0x1F {
+            // ALU block
+            // ORA
+            0x01 => (Instruction::Ora, AddressingMode::IndirectX),
+            0x05 => (Instruction::Ora, AddressingMode::ZeroPage),
+            0x09 => (Instruction::Ora, AddressingMode::Immediate),
+            0x0D => (Instruction::Ora, AddressingMode::Absolute),
+            0x11 => (Instruction::Ora, AddressingMode::IndirectY),
+            0x15 => (Instruction::Ora, AddressingMode::ZeroPageX),
+            0x19 => (Instruction::Ora, AddressingMode::AbsoluteY),
+            0x1D => (Instruction::Ora, AddressingMode::AbsoluteX),
+            _ => todo!("Unsupported opcode {:#02X}", opcode & 0x1f),
+        };
     }
 }
 
@@ -268,6 +313,9 @@ mod tests {
             let mut expected_cpu = case.final_state.create_cpu();
             // Requesting opcode to match with actual cpu state
             expected_cpu.step(0xFF);
+            expected_cpu.instruction = cpu.instruction;
+            expected_cpu.addressing_mode = cpu.addressing_mode;
+
             let expected_memory = case.final_state.create_memory();
             assert_eq!(
                 expected_memory, memory,
@@ -284,5 +332,6 @@ mod tests {
 
     mos6502_tests! {
         test_ora_imm      => "09.json",
+        test_ora_abs      => "0d.json",
     }
 }
