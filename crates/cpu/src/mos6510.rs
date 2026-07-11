@@ -31,6 +31,7 @@ enum Instruction {
     Ora,
     And,
     Eor,
+    Lda,
 }
 
 const STATUS_REGISTER_CARRY: u8 = 0x01;
@@ -378,6 +379,10 @@ impl Mos6510 {
                 self.a ^= self.value_latch;
                 self.set_nz_flags(self.a);
             }
+            Instruction::Lda => {
+                self.a = self.value_latch;
+                self.set_nz_flags(self.a);
+            }
         }
 
         self.cycle = 0;
@@ -416,6 +421,15 @@ impl Mos6510 {
             0x55 => (Instruction::Eor, AddressingMode::ZeroPageX),
             0x59 => (Instruction::Eor, AddressingMode::AbsoluteY),
             0x5D => (Instruction::Eor, AddressingMode::AbsoluteX),
+            // LDA
+            0xA1 => (Instruction::Lda, AddressingMode::IndirectX),
+            0xA5 => (Instruction::Lda, AddressingMode::ZeroPage),
+            0xA9 => (Instruction::Lda, AddressingMode::Immediate),
+            0xAD => (Instruction::Lda, AddressingMode::Absolute),
+            0xB1 => (Instruction::Lda, AddressingMode::IndirectY),
+            0xB5 => (Instruction::Lda, AddressingMode::ZeroPageX),
+            0xB9 => (Instruction::Lda, AddressingMode::AbsoluteY),
+            0xBD => (Instruction::Lda, AddressingMode::AbsoluteX),
             _ => todo!("Unsupported opcode {:#02X}", opcode & 0x1f),
         };
     }
@@ -601,5 +615,13 @@ mod tests {
         test_eor_zero_x   => "55.json",
         test_eor_abs_y    => "59.json",
         test_eor_abs_x    => "5d.json",
+        test_lda_ind_x    => "a1.json",
+        test_lda_zero     => "a5.json",
+        test_lda_imm      => "a9.json",
+        test_lda_abs      => "ad.json",
+        test_lda_ind_y    => "b1.json",
+        test_lda_zero_x   => "b5.json",
+        test_lda_abs_y    => "b9.json",
+        test_lda_abs_x    => "bd.json",
     }
 }
