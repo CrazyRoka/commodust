@@ -30,6 +30,7 @@ enum AddressModeProcessingResult {
 enum Instruction {
     Ora,
     And,
+    Eor,
 }
 
 const STATUS_REGISTER_CARRY: u8 = 0x01;
@@ -368,20 +369,21 @@ impl Mos6510 {
             Instruction::Ora => {
                 self.a |= self.value_latch;
                 self.set_nz_flags(self.a);
-                self.cycle = 0;
-                self.value_latch = 0;
-                self.addr_latch = 0;
-                self.step(0xFF)
             }
             Instruction::And => {
                 self.a &= self.value_latch;
                 self.set_nz_flags(self.a);
-                self.cycle = 0;
-                self.value_latch = 0;
-                self.addr_latch = 0;
-                self.step(0xFF)
+            }
+            Instruction::Eor => {
+                self.a ^= self.value_latch;
+                self.set_nz_flags(self.a);
             }
         }
+
+        self.cycle = 0;
+        self.value_latch = 0;
+        self.addr_latch = 0;
+        self.step(0xFF)
     }
 
     fn decode_instruction(&mut self, opcode: u8) {
@@ -405,6 +407,15 @@ impl Mos6510 {
             0x35 => (Instruction::And, AddressingMode::ZeroPageX),
             0x39 => (Instruction::And, AddressingMode::AbsoluteY),
             0x3D => (Instruction::And, AddressingMode::AbsoluteX),
+            // EOR
+            0x41 => (Instruction::Eor, AddressingMode::IndirectX),
+            0x45 => (Instruction::Eor, AddressingMode::ZeroPage),
+            0x49 => (Instruction::Eor, AddressingMode::Immediate),
+            0x4D => (Instruction::Eor, AddressingMode::Absolute),
+            0x51 => (Instruction::Eor, AddressingMode::IndirectY),
+            0x55 => (Instruction::Eor, AddressingMode::ZeroPageX),
+            0x59 => (Instruction::Eor, AddressingMode::AbsoluteY),
+            0x5D => (Instruction::Eor, AddressingMode::AbsoluteX),
             _ => todo!("Unsupported opcode {:#02X}", opcode & 0x1f),
         };
     }
@@ -582,5 +593,13 @@ mod tests {
         test_and_zero_x   => "35.json",
         test_and_abs_y    => "39.json",
         test_and_abs_x    => "3d.json",
+        test_eor_ind_x    => "41.json",
+        test_eor_zero     => "45.json",
+        test_eor_imm      => "49.json",
+        test_eor_abs      => "4d.json",
+        test_eor_ind_y    => "51.json",
+        test_eor_zero_x   => "55.json",
+        test_eor_abs_y    => "59.json",
+        test_eor_abs_x    => "5d.json",
     }
 }
