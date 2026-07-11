@@ -32,6 +32,7 @@ enum Instruction {
     And,
     Eor,
     Lda,
+    Cmp,
 }
 
 const STATUS_REGISTER_CARRY: u8 = 0x01;
@@ -383,6 +384,11 @@ impl Mos6510 {
                 self.a = self.value_latch;
                 self.set_nz_flags(self.a);
             }
+            Instruction::Cmp => {
+                let (res, overflow) = self.a.overflowing_sub(self.value_latch);
+                self.set_nz_flags(res);
+                self.set_carry(!overflow);
+            }
         }
 
         self.cycle = 0;
@@ -430,6 +436,15 @@ impl Mos6510 {
             0xB5 => (Instruction::Lda, AddressingMode::ZeroPageX),
             0xB9 => (Instruction::Lda, AddressingMode::AbsoluteY),
             0xBD => (Instruction::Lda, AddressingMode::AbsoluteX),
+            // CMP
+            0xC1 => (Instruction::Cmp, AddressingMode::IndirectX),
+            0xC5 => (Instruction::Cmp, AddressingMode::ZeroPage),
+            0xC9 => (Instruction::Cmp, AddressingMode::Immediate),
+            0xCD => (Instruction::Cmp, AddressingMode::Absolute),
+            0xD1 => (Instruction::Cmp, AddressingMode::IndirectY),
+            0xD5 => (Instruction::Cmp, AddressingMode::ZeroPageX),
+            0xD9 => (Instruction::Cmp, AddressingMode::AbsoluteY),
+            0xDD => (Instruction::Cmp, AddressingMode::AbsoluteX),
             _ => todo!("Unsupported opcode {:#02X}", opcode & 0x1f),
         };
     }
@@ -444,6 +459,14 @@ impl Mos6510 {
             self.p |= STATUS_REGISTER_NEGATIVE;
         } else {
             self.p &= !STATUS_REGISTER_NEGATIVE;
+        }
+    }
+
+    fn set_carry(&mut self, overflow: bool) {
+        if overflow {
+            self.p |= STATUS_REGISTER_CARRY;
+        } else {
+            self.p &= !STATUS_REGISTER_CARRY;
         }
     }
 }
@@ -623,5 +646,13 @@ mod tests {
         test_lda_zero_x   => "b5.json",
         test_lda_abs_y    => "b9.json",
         test_lda_abs_x    => "bd.json",
+        test_cmp_ind_x    => "c1.json",
+        test_cmp_zero     => "c5.json",
+        test_cmp_imm      => "c9.json",
+        test_cmp_abs      => "cd.json",
+        test_cmp_ind_y    => "d1.json",
+        test_cmp_zero_x   => "d5.json",
+        test_cmp_abs_y    => "d9.json",
+        test_cmp_abs_x    => "dd.json",
     }
 }
