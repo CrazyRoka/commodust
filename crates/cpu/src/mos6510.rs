@@ -111,7 +111,27 @@ impl Mos6510 {
                     self.cycle
                 ),
             },
-            AddressingMode::ZeroPage => todo!(),
+            AddressingMode::ZeroPage => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                3 => {
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => panic!(
+                    "Unexpected cycle for Immediate addressing mode {}",
+                    self.cycle
+                ),
+            },
             AddressingMode::ZeroPageX => todo!(),
             AddressingMode::ZeroPageY => todo!(),
             AddressingMode::Absolute => match self.cycle {
@@ -331,6 +351,7 @@ mod tests {
     }
 
     mos6502_tests! {
+        test_ora_zero     => "05.json",
         test_ora_imm      => "09.json",
         test_ora_abs      => "0d.json",
     }
