@@ -165,7 +165,43 @@ impl Mos6510 {
             AddressingMode::AbsoluteX => todo!(),
             AddressingMode::AbsoluteY => todo!(),
             AddressingMode::Indirect => todo!(),
-            AddressingMode::IndirectX => todo!(),
+            AddressingMode::IndirectX => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                3 => {
+                    self.cycle = 4;
+                    self.addr_latch = self.x.wrapping_add(self.addr_latch as u8) as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                4 => {
+                    let addr = (self.addr_latch as u8 & 0xFF).wrapping_add(1) as u16;
+                    self.cycle = 5;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                5 => {
+                    self.cycle = 6;
+                    self.addr_latch |= (data_in as u16) << 8;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                6 => {
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => panic!(
+                    "Unexpected cycle for Immediate addressing mode {}",
+                    self.cycle
+                ),
+            },
             AddressingMode::IndirectY => todo!(),
             AddressingMode::Relative => todo!(),
         }
@@ -321,6 +357,8 @@ mod tests {
                             "Test case '{}': Write value doesn't match",
                             case.name
                         );
+
+                        memory.insert(*cpu_write_addr, *cpu_write_value);
                         request = cpu.step(0xFF);
                     }
                     _ => panic!(
@@ -351,6 +389,7 @@ mod tests {
     }
 
     mos6502_tests! {
+        test_ora_ind_x    => "01.json",
         test_ora_zero     => "05.json",
         test_ora_imm      => "09.json",
         test_ora_abs      => "0d.json",
