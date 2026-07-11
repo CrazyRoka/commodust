@@ -128,11 +128,36 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => panic!(
-                    "Unexpected cycle for Immediate addressing mode {}",
+                    "Unexpected cycle for ZeroPage addressing mode {}",
                     self.cycle
                 ),
             },
-            AddressingMode::ZeroPageX => todo!(),
+            AddressingMode::ZeroPageX => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                3 => {
+                    self.cycle = 4;
+                    self.addr_latch = (self.addr_latch as u8).wrapping_add(self.x) as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                4 => {
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => panic!(
+                    "Unexpected cycle for ZeroPage addressing mode {}",
+                    self.cycle
+                ),
+            },
             AddressingMode::ZeroPageY => todo!(),
             AddressingMode::Absolute => match self.cycle {
                 1 => {
@@ -158,12 +183,96 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => panic!(
-                    "Unexpected cycle for Immediate addressing mode {}",
+                    "Unexpected cycle for Absolute addressing mode {}",
                     self.cycle
                 ),
             },
-            AddressingMode::AbsoluteX => todo!(),
-            AddressingMode::AbsoluteY => todo!(),
+            AddressingMode::AbsoluteX => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                3 => {
+                    self.cycle = 4;
+                    self.addr_latch |= (data_in as u16) << 8;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(
+                        (self.addr_latch & 0xFF00)
+                            | ((self.addr_latch & 0x00FF) as u8).wrapping_add(self.x) as u16,
+                    ))
+                }
+                4 => {
+                    if self.addr_latch.wrapping_add(self.x as u16) & 0xFF00
+                        == self.addr_latch & 0xFF00
+                    {
+                        self.value_latch = data_in;
+                        AddressModeProcessingResult::Finished
+                    } else {
+                        self.cycle = 5;
+                        self.addr_latch = self.addr_latch.wrapping_add(self.x as u16);
+                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    }
+                }
+                5 => {
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => panic!(
+                    "Unexpected cycle for AbsoluteX addressing mode {}",
+                    self.cycle
+                ),
+            },
+            AddressingMode::AbsoluteY => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                3 => {
+                    self.cycle = 4;
+                    self.addr_latch |= (data_in as u16) << 8;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(
+                        (self.addr_latch & 0xFF00)
+                            | ((self.addr_latch & 0x00FF) as u8).wrapping_add(self.y) as u16,
+                    ))
+                }
+                4 => {
+                    if self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
+                        == self.addr_latch & 0xFF00
+                    {
+                        self.value_latch = data_in;
+                        AddressModeProcessingResult::Finished
+                    } else {
+                        self.cycle = 5;
+                        self.addr_latch = self.addr_latch.wrapping_add(self.y as u16);
+                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    }
+                }
+                5 => {
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => panic!(
+                    "Unexpected cycle for AbsoluteY addressing mode {}",
+                    self.cycle
+                ),
+            },
             AddressingMode::Indirect => todo!(),
             AddressingMode::IndirectX => match self.cycle {
                 1 => {
@@ -198,11 +307,57 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => panic!(
-                    "Unexpected cycle for Immediate addressing mode {}",
+                    "Unexpected cycle for IndirectX addressing mode {}",
                     self.cycle
                 ),
             },
-            AddressingMode::IndirectY => todo!(),
+            AddressingMode::IndirectY => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                3 => {
+                    let addr = (self.addr_latch as u8 & 0xFF).wrapping_add(1) as u16;
+                    self.cycle = 4;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                4 => {
+                    self.cycle = 5;
+                    self.addr_latch |= (data_in as u16) << 8;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(
+                        (self.addr_latch & 0xFF00)
+                            | ((self.addr_latch & 0x00FF) as u8).wrapping_add(self.y) as u16,
+                    ))
+                }
+                5 => {
+                    if self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
+                        == self.addr_latch & 0xFF00
+                    {
+                        self.value_latch = data_in;
+                        AddressModeProcessingResult::Finished
+                    } else {
+                        self.cycle = 6;
+                        self.addr_latch = self.addr_latch.wrapping_add(self.y as u16);
+                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    }
+                }
+                6 => {
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => panic!(
+                    "Unexpected cycle for IndirectY addressing mode {}",
+                    self.cycle
+                ),
+            },
             AddressingMode::Relative => todo!(),
         }
     }
@@ -393,5 +548,9 @@ mod tests {
         test_ora_zero     => "05.json",
         test_ora_imm      => "09.json",
         test_ora_abs      => "0d.json",
+        test_ora_ind_y    => "11.json",
+        test_ora_zero_x   => "15.json",
+        test_ora_abs_y    => "19.json",
+        test_ora_abs_x    => "1d.json",
     }
 }
