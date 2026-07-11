@@ -29,6 +29,7 @@ enum AddressModeProcessingResult {
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Instruction {
     Ora,
+    And,
 }
 
 const STATUS_REGISTER_CARRY: u8 = 0x01;
@@ -366,16 +367,15 @@ impl Mos6510 {
         match self.instruction {
             Instruction::Ora => {
                 self.a |= self.value_latch;
-                if self.a == 0 {
-                    self.p |= STATUS_REGISTER_ZERO;
-                } else {
-                    self.p &= !STATUS_REGISTER_ZERO;
-                }
-                if self.a & 0x80 != 0 {
-                    self.p |= STATUS_REGISTER_NEGATIVE;
-                } else {
-                    self.p &= !STATUS_REGISTER_NEGATIVE;
-                }
+                self.set_nz_flags(self.a);
+                self.cycle = 0;
+                self.value_latch = 0;
+                self.addr_latch = 0;
+                self.step(0xFF)
+            }
+            Instruction::And => {
+                self.a &= self.value_latch;
+                self.set_nz_flags(self.a);
                 self.cycle = 0;
                 self.value_latch = 0;
                 self.addr_latch = 0;
@@ -385,7 +385,7 @@ impl Mos6510 {
     }
 
     fn decode_instruction(&mut self, opcode: u8) {
-        (self.instruction, self.addressing_mode) = match opcode & 0x1F {
+        (self.instruction, self.addressing_mode) = match opcode {
             // ALU block
             // ORA
             0x01 => (Instruction::Ora, AddressingMode::IndirectX),
@@ -396,8 +396,30 @@ impl Mos6510 {
             0x15 => (Instruction::Ora, AddressingMode::ZeroPageX),
             0x19 => (Instruction::Ora, AddressingMode::AbsoluteY),
             0x1D => (Instruction::Ora, AddressingMode::AbsoluteX),
+            // AND
+            0x21 => (Instruction::And, AddressingMode::IndirectX),
+            0x25 => (Instruction::And, AddressingMode::ZeroPage),
+            0x29 => (Instruction::And, AddressingMode::Immediate),
+            0x2D => (Instruction::And, AddressingMode::Absolute),
+            0x31 => (Instruction::And, AddressingMode::IndirectY),
+            0x35 => (Instruction::And, AddressingMode::ZeroPageX),
+            0x39 => (Instruction::And, AddressingMode::AbsoluteY),
+            0x3D => (Instruction::And, AddressingMode::AbsoluteX),
             _ => todo!("Unsupported opcode {:#02X}", opcode & 0x1f),
         };
+    }
+
+    fn set_nz_flags(&mut self, value: u8) {
+        if value == 0 {
+            self.p |= STATUS_REGISTER_ZERO;
+        } else {
+            self.p &= !STATUS_REGISTER_ZERO;
+        }
+        if value & 0x80 != 0 {
+            self.p |= STATUS_REGISTER_NEGATIVE;
+        } else {
+            self.p &= !STATUS_REGISTER_NEGATIVE;
+        }
     }
 }
 
@@ -552,5 +574,13 @@ mod tests {
         test_ora_zero_x   => "15.json",
         test_ora_abs_y    => "19.json",
         test_ora_abs_x    => "1d.json",
+        test_and_ind_x    => "21.json",
+        test_and_zero     => "25.json",
+        test_and_imm      => "29.json",
+        test_and_abs      => "2d.json",
+        test_and_ind_y    => "31.json",
+        test_and_zero_x   => "35.json",
+        test_and_abs_y    => "39.json",
+        test_and_abs_x    => "3d.json",
     }
 }
