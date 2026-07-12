@@ -59,6 +59,8 @@ enum Instruction {
     Rla,
     Alr,
     Sre,
+    Arr,
+    Rra,
 }
 
 impl Instruction {
@@ -93,6 +95,8 @@ impl Instruction {
             Self::Rla => false,
             Self::Alr => false,
             Self::Sre => false,
+            Self::Arr => false,
+            Self::Rra => false,
         }
     }
 
@@ -127,6 +131,8 @@ impl Instruction {
             Self::Rla => true,
             Self::Alr => false,
             Self::Sre => true,
+            Self::Arr => true,
+            Self::Rra => true,
         }
     }
 }
@@ -505,48 +511,7 @@ impl Mos6510 {
                 self.set_nz_flags(self.a);
             }
             Instruction::Adc => {
-                let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
-                    1
-                } else {
-                    0
-                };
-                let binary_res = (self.a as u16) + (self.value_latch as u16) + carry as u16;
-                self.set_nz_flags((binary_res & 0xFF) as u8);
-
-                if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
-                    self.set_overflow(self.a, self.value_latch, (binary_res & 0xFF) as u8);
-                    self.a = (binary_res & 0xFF) as u8;
-                    self.set_carry(binary_res > 0xFF);
-                } else {
-                    let mut low = (self.a & 0x0F) + (self.value_latch & 0x0F) + carry;
-                    let mut high = (self.a & 0xF0) as u16
-                        + (self.value_latch & 0xF0) as u16
-                        + (if low > 9 { 0x10 } else { 0 });
-
-                    self.set_overflow(self.a, self.value_latch, high as u8);
-
-                    if high & 0x80 != 0 {
-                        self.p |= STATUS_REGISTER_NEGATIVE;
-                    } else {
-                        self.p &= !STATUS_REGISTER_NEGATIVE;
-                    }
-
-                    if low > 9 {
-                        low = (low + 6) & 0x0F;
-                    } else {
-                        low = low & 0x0F;
-                    }
-
-                    let decimal_carry = high > 0x90;
-                    if decimal_carry {
-                        high = (high + 0x60) & 0xF0;
-                    } else {
-                        high = high & 0xF0;
-                    }
-
-                    self.a = (high as u8) | low;
-                    self.set_carry(decimal_carry);
-                }
+                self.run_adc(self.value_latch);
             }
             Instruction::Nop => {
                 self.cycle = 0;
@@ -905,6 +870,69 @@ impl Mos6510 {
                     _ => unreachable!("Unexpected SRE execution cycle {}", self.cycle),
                 };
             }
+            Instruction::Rra => {
+                return match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        BusOperation::Write(self.addr_latch, self.value_latch)
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let old_carry = self.p & STATUS_REGISTER_CARRY != 0;
+                        let carry = self.value_latch & 0x01 != 0;
+                        let res = (self.value_latch >> 1) | if old_carry { 0x80 } else { 0x00 };
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+
+                        self.set_carry(carry);
+                        self.run_adc(res);
+                        BusOperation::Write(addr, res)
+                    }
+                    _ => unreachable!("Unexpected RRA execution cycle {}", self.cycle),
+                };
+            }
+            Instruction::Arr => {
+                let and = self.a & self.value_latch;
+                let old_carry = (self.p & STATUS_REGISTER_CARRY) != 0;
+                let shifted = (and >> 1) | if old_carry { 0x80 } else { 0 };
+
+                if self.p & STATUS_REGISTER_DECIMAL_MODE != 0 {
+                    self.set_nz_flags(shifted);
+
+                    if ((and ^ shifted) & 0x40) != 0 {
+                        self.p |= STATUS_REGISTER_OVERFLOW;
+                    } else {
+                        self.p &= !STATUS_REGISTER_OVERFLOW;
+                    }
+
+                    let low_adjusted = if (and & 0x0F) + (and & 0x01) > 5 {
+                        (shifted & 0xF0) | (shifted.wrapping_add(6) & 0x0F)
+                    } else {
+                        shifted
+                    };
+
+                    if (and & 0xF0) as u16 + (and & 0x10) as u16 > 0x50 {
+                        self.a = (low_adjusted & 0x0F) | (low_adjusted.wrapping_add(0x60) & 0xF0);
+                        self.set_carry(true);
+                    } else {
+                        self.a = low_adjusted;
+                        self.set_carry(false);
+                    }
+                } else {
+                    self.a = shifted;
+                    self.set_nz_flags(self.a);
+
+                    let c = (shifted & 0x40) != 0;
+                    self.set_carry(c);
+
+                    if ((shifted >> 6) ^ (shifted >> 5)) & 1 != 0 {
+                        self.p |= STATUS_REGISTER_OVERFLOW;
+                    } else {
+                        self.p &= !STATUS_REGISTER_OVERFLOW;
+                    }
+                }
+            }
         }
 
         self.cycle = 0;
@@ -1089,6 +1117,15 @@ impl Mos6510 {
             0x57 => (Instruction::Sre, AddressingMode::ZeroPageX),
             0x5B => (Instruction::Sre, AddressingMode::AbsoluteY),
             0x5F => (Instruction::Sre, AddressingMode::AbsoluteX),
+            // Rra
+            0x63 => (Instruction::Rra, AddressingMode::IndirectX),
+            0x67 => (Instruction::Rra, AddressingMode::ZeroPage),
+            0x6B => (Instruction::Arr, AddressingMode::Immediate),
+            0x6F => (Instruction::Rra, AddressingMode::Absolute),
+            0x73 => (Instruction::Rra, AddressingMode::IndirectY),
+            0x77 => (Instruction::Rra, AddressingMode::ZeroPageX),
+            0x7B => (Instruction::Rra, AddressingMode::AbsoluteY),
+            0x7F => (Instruction::Rra, AddressingMode::AbsoluteX),
             _ => todo!("Unsupported opcode {:#02X}", opcode),
         };
     }
@@ -1120,6 +1157,50 @@ impl Mos6510 {
             self.p |= STATUS_REGISTER_OVERFLOW;
         } else {
             self.p &= !STATUS_REGISTER_OVERFLOW;
+        }
+    }
+
+    fn run_adc(&mut self, value: u8) {
+        let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
+            1
+        } else {
+            0
+        };
+        let binary_res = (self.a as u16) + (value as u16) + carry as u16;
+        self.set_nz_flags((binary_res & 0xFF) as u8);
+
+        if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
+            self.set_overflow(self.a, value, (binary_res & 0xFF) as u8);
+            self.a = (binary_res & 0xFF) as u8;
+            self.set_carry(binary_res > 0xFF);
+        } else {
+            let mut low = (self.a & 0x0F) + (value & 0x0F) + carry;
+            let mut high =
+                (self.a & 0xF0) as u16 + (value & 0xF0) as u16 + (if low > 9 { 0x10 } else { 0 });
+
+            self.set_overflow(self.a, value, high as u8);
+
+            if high & 0x80 != 0 {
+                self.p |= STATUS_REGISTER_NEGATIVE;
+            } else {
+                self.p &= !STATUS_REGISTER_NEGATIVE;
+            }
+
+            if low > 9 {
+                low = (low + 6) & 0x0F;
+            } else {
+                low = low & 0x0F;
+            }
+
+            let decimal_carry = high > 0x90;
+            if decimal_carry {
+                high = (high + 0x60) & 0xF0;
+            } else {
+                high = high & 0xF0;
+            }
+
+            self.a = (high as u8) | low;
+            self.set_carry(decimal_carry);
         }
     }
 }
@@ -1423,5 +1504,13 @@ mod tests {
         test_sre_zero_x   => "57.json",
         test_sre_abs_y    => "5b.json",
         test_sre_abs_x    => "5f.json",
+        test_rra_ind_x    => "63.json",
+        test_rra_zero     => "67.json",
+        test_arr_imm_2b   => "6b.json",
+        test_rra_abs      => "6f.json",
+        test_rra_ind_y    => "73.json",
+        test_rra_zero_x   => "77.json",
+        test_rra_abs_y    => "7b.json",
+        test_rra_abs_x    => "7f.json",
     }
 }
