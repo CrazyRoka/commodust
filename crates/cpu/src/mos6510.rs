@@ -42,6 +42,10 @@ enum Instruction {
     Rol,
     Lsr,
     Ror,
+    Stx,
+    Txa,
+    Txs,
+    Shx,
     Ldx,
     Tax,
     Tsx,
@@ -70,6 +74,10 @@ impl Instruction {
             Self::Rol => false,
             Self::Lsr => false,
             Self::Ror => false,
+            Self::Stx => true,
+            Self::Txa => false,
+            Self::Txs => false,
+            Self::Shx => true,
             Self::Ldx => false,
             Self::Tax => false,
             Self::Tsx => false,
@@ -98,10 +106,14 @@ impl Instruction {
             Self::Rol => true,
             Self::Lsr => true,
             Self::Ror => true,
-            Self::Dex => true,
+            Self::Stx => false,
+            Self::Txa => false,
+            Self::Txs => false,
+            Self::Shx => false,
             Self::Ldx => false,
             Self::Tax => false,
             Self::Tsx => false,
+            Self::Dex => true,
             Self::Dec => true,
             Self::Inc => true,
             Self::Anc => false,
@@ -647,6 +659,34 @@ impl Mos6510 {
                     _ => unreachable!("Unexpected ROR execution cycle {}", self.cycle),
                 };
             }
+            Instruction::Stx => {
+                let addr = self.addr_latch;
+                self.cycle = 0;
+                self.value_latch = 0;
+                self.addr_latch = 0;
+                return BusOperation::Write(addr, self.x);
+            }
+            Instruction::Txa => {
+                self.a = self.x;
+                self.set_nz_flags(self.a);
+            }
+            Instruction::Txs => {
+                self.s = self.x;
+            }
+            Instruction::Shx => {
+                let h = (self.addr_latch.wrapping_sub(self.y as u16) >> 8) as u8;
+                let val = self.x & h.wrapping_add(1);
+                let page_crossed = (self.addr_latch >> 8) as u8 != h;
+                let addr = if page_crossed {
+                    ((val as u16) << 8) | (self.addr_latch & 0x00FF)
+                } else {
+                    self.addr_latch
+                };
+                self.cycle = 0;
+                self.value_latch = 0;
+                self.addr_latch = 0;
+                return BusOperation::Write(addr, val);
+            }
             Instruction::Ldx => {
                 self.x = self.value_latch;
                 self.set_nz_flags(self.x);
@@ -880,6 +920,15 @@ impl Mos6510 {
             0x76 => (Instruction::Ror, AddressingMode::ZeroPageX),
             0x7A => (Instruction::Nop, AddressingMode::Implied),
             0x7E => (Instruction::Ror, AddressingMode::AbsoluteX),
+            // STX
+            0x82 => (Instruction::Nop, AddressingMode::Immediate),
+            0x86 => (Instruction::Stx, AddressingMode::ZeroPage),
+            0x8A => (Instruction::Txa, AddressingMode::Accumulator),
+            0x8E => (Instruction::Stx, AddressingMode::Absolute),
+            0x92 => (Instruction::Jam, AddressingMode::Implied),
+            0x96 => (Instruction::Stx, AddressingMode::ZeroPageY),
+            0x9A => (Instruction::Txs, AddressingMode::Accumulator),
+            0x9E => (Instruction::Shx, AddressingMode::AbsoluteY),
             // LDX
             0xA2 => (Instruction::Ldx, AddressingMode::Immediate),
             0xA6 => (Instruction::Ldx, AddressingMode::ZeroPage),
@@ -1188,11 +1237,19 @@ mod tests {
         test_ror_zero_x   => "76.json",
         test_nop_7a       => "7a.json",
         test_ror_abs_x    => "7e.json",
-        test_ldx_82       => "a2.json",
+        test_nop_82       => "82.json",
+        test_stx_zero     => "86.json",
+        test_txa          => "8a.json",
+        test_stx_abs      => "8e.json",
+        test_jam_92       => "92.json",
+        test_stx_zero_y   => "96.json",
+        test_txs          => "9a.json",
+        test_shx          => "9e.json",
+        test_ldx_imm      => "a2.json",
         test_ldx_zero     => "a6.json",
         test_tax          => "aa.json",
         test_ldx_abs      => "ae.json",
-        test_jam_92       => "b2.json",
+        test_jam_b2       => "b2.json",
         test_ldx_zero_y   => "b6.json",
         test_tsx          => "ba.json",
         test_ldx_abs_y    => "be.json",
