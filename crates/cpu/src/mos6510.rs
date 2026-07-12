@@ -30,6 +30,11 @@ enum AddressModeProcessingResult {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Instruction {
+    Sty,
+    Dey,
+    Bcc,
+    Tya,
+    Shy,
     Ldy,
     Tay,
     Bcs,
@@ -87,6 +92,11 @@ enum Instruction {
 impl Instruction {
     fn is_writing(&self) -> bool {
         match self {
+            Self::Sty => true,
+            Self::Dey => false,
+            Self::Bcc => false,
+            Self::Tya => false,
+            Self::Shy => true,
             Self::Ldy => false,
             Self::Tay => false,
             Self::Bcs => false,
@@ -144,6 +154,11 @@ impl Instruction {
 
     fn is_reading_and_writing(&self) -> bool {
         match self {
+            Self::Sty => false,
+            Self::Dey => false,
+            Self::Bcc => false,
+            Self::Tya => false,
+            Self::Shy => false,
             Self::Ldy => false,
             Self::Tay => false,
             Self::Bcs => false,
@@ -560,6 +575,32 @@ impl Mos6510 {
         }
 
         match self.instruction {
+            Instruction::Sty => {
+                let addr = self.addr_latch;
+                self.prepare_for_next_instruction();
+                return BusOperation::Write(addr, self.y);
+            }
+            Instruction::Dey => {
+                self.y = self.y.wrapping_sub(1);
+                self.set_nz_flags(self.y);
+            }
+            Instruction::Bcc => return self.branch(self.p & STATUS_REGISTER_CARRY == 0),
+            Instruction::Tya => {
+                self.a = self.y;
+                self.set_nz_flags(self.a);
+            }
+            Instruction::Shy => {
+                let h = (self.addr_latch.wrapping_sub(self.x as u16) >> 8) as u8;
+                let val = self.y & h.wrapping_add(1);
+                let page_crossed = (self.addr_latch >> 8) as u8 != h;
+                let addr = if page_crossed {
+                    ((val as u16) << 8) | (self.addr_latch & 0x00FF)
+                } else {
+                    self.addr_latch
+                };
+                self.prepare_for_next_instruction();
+                return BusOperation::Write(addr, val);
+            }
             Instruction::Ldy => {
                 self.y = self.value_latch;
                 self.set_nz_flags(self.y);
@@ -1064,6 +1105,15 @@ impl Mos6510 {
     fn decode_instruction(&mut self, opcode: u8) {
         (self.instruction, self.addressing_mode) = match opcode {
             // Control Instructions block
+            // STY
+            0x80 => (Instruction::Nop, AddressingMode::Immediate),
+            0x84 => (Instruction::Sty, AddressingMode::ZeroPage),
+            0x88 => (Instruction::Dey, AddressingMode::Accumulator),
+            0x8C => (Instruction::Sty, AddressingMode::Absolute),
+            0x90 => (Instruction::Bcc, AddressingMode::Relative),
+            0x94 => (Instruction::Sty, AddressingMode::ZeroPageX),
+            0x98 => (Instruction::Tya, AddressingMode::Accumulator),
+            0x9C => (Instruction::Shy, AddressingMode::AbsoluteX),
             // LDY
             0xA0 => (Instruction::Ldy, AddressingMode::Immediate),
             0xA4 => (Instruction::Ldy, AddressingMode::ZeroPage),
@@ -1608,6 +1658,14 @@ mod tests {
     }
 
     mos6502_tests! {
+        test_nop_80       => "80.json",
+        test_sty_zero     => "84.json",
+        test_dey          => "88.json",
+        test_sty_abs      => "8c.json",
+        test_bcc          => "90.json",
+        test_sty_zero_x   => "94.json",
+        test_tya          => "98.json",
+        test_shy          => "9c.json",
         test_ldy_ind_x    => "a0.json",
         test_ldy_zero     => "a4.json",
         test_tay          => "a8.json",
