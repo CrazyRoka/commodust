@@ -34,6 +34,10 @@ enum Instruction {
     Tay,
     Bcs,
     Clv,
+    Cpy,
+    Iny,
+    Bne,
+    Cld,
     Ora,
     And,
     Eor,
@@ -74,6 +78,10 @@ impl Instruction {
             Self::Tay => false,
             Self::Bcs => false,
             Self::Clv => false,
+            Self::Cpy => false,
+            Self::Iny => false,
+            Self::Bne => false,
+            Self::Cld => false,
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
@@ -114,6 +122,10 @@ impl Instruction {
             Self::Tay => false,
             Self::Bcs => false,
             Self::Clv => false,
+            Self::Cpy => false,
+            Self::Iny => false,
+            Self::Bne => false,
+            Self::Cld => false,
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
@@ -517,33 +529,19 @@ impl Mos6510 {
                 self.y = self.a;
                 self.set_nz_flags(self.y);
             }
-            Instruction::Bcs => match self.cycle {
-                INSTRUCTION_EXECUTION_PHASE => {
-                    if self.p & STATUS_REGISTER_CARRY != 0 {
-                        self.addr_latch = if self.value_latch >= 128 {
-                            self.pc
-                                .wrapping_sub(1)
-                                .wrapping_sub(0xFF - self.value_latch as u16)
-                        } else {
-                            self.pc.wrapping_add(self.value_latch as u16)
-                        };
-                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
-                        return BusOperation::Read(self.pc);
-                    }
-                }
-                val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
-                    if self.pc & 0xFF00 != self.addr_latch & 0xFF00 {
-                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 2;
-                        return BusOperation::Read((self.pc & 0xFF00) | (self.addr_latch & 0x00FF));
-                    }
-                    self.pc = self.addr_latch;
-                }
-                val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
-                    self.pc = self.addr_latch;
-                }
-                _ => unreachable!("Unexpected BCS execution cycle {}", self.cycle),
-            },
+            Instruction::Bcs => return self.branch(self.p & STATUS_REGISTER_CARRY != 0),
             Instruction::Clv => self.p &= !STATUS_REGISTER_OVERFLOW,
+            Instruction::Cpy => {
+                let (res, carry) = self.y.overflowing_sub(self.value_latch);
+                self.set_nz_flags(res);
+                self.set_carry(!carry);
+            }
+            Instruction::Iny => {
+                self.y = self.y.wrapping_add(1);
+                self.set_nz_flags(self.y);
+            }
+            Instruction::Bne => return self.branch(self.p & STATUS_REGISTER_ZERO == 0),
+            Instruction::Cld => self.p &= !STATUS_REGISTER_DECIMAL_MODE,
             Instruction::Ora => {
                 self.a |= self.value_latch;
                 self.set_nz_flags(self.a);
@@ -560,16 +558,12 @@ impl Mos6510 {
                 self.run_adc(self.value_latch);
             }
             Instruction::Nop => {
-                self.cycle = 0;
-                self.value_latch = 0;
-                self.addr_latch = 0;
+                self.prepare_for_next_instruction();
                 return BusOperation::Read(self.pc);
             }
             Instruction::Sta => {
                 let addr = self.addr_latch;
-                self.cycle = 0;
-                self.value_latch = 0;
-                self.addr_latch = 0;
+                self.prepare_for_next_instruction();
                 return BusOperation::Write(addr, self.a);
             }
             Instruction::Lda => {
@@ -619,9 +613,7 @@ impl Mos6510 {
                 }
             }
             Instruction::Jam => {
-                self.cycle = 0;
-                self.value_latch = 0;
-                self.addr_latch = 0;
+                self.prepare_for_next_instruction();
                 self.jammed = 1;
                 return BusOperation::Read(self.pc);
             }
@@ -645,9 +637,7 @@ impl Mos6510 {
                         self.set_nz_flags(res);
                         self.set_carry(carry);
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
                     _ => unreachable!("Unexpected ASL execution cycle {}", self.cycle),
@@ -683,9 +673,7 @@ impl Mos6510 {
                         self.set_nz_flags(res);
                         self.set_carry(carry);
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
                     _ => unreachable!("Unexpected ROL execution cycle {}", self.cycle),
@@ -711,9 +699,7 @@ impl Mos6510 {
                         self.set_nz_flags(res);
                         self.set_carry(carry);
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
                     _ => unreachable!("Unexpected LSR execution cycle {}", self.cycle),
@@ -749,9 +735,7 @@ impl Mos6510 {
                         self.set_nz_flags(res);
                         self.set_carry(carry);
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
                     _ => unreachable!("Unexpected ROR execution cycle {}", self.cycle),
@@ -759,9 +743,7 @@ impl Mos6510 {
             }
             Instruction::Stx => {
                 let addr = self.addr_latch;
-                self.cycle = 0;
-                self.value_latch = 0;
-                self.addr_latch = 0;
+                self.prepare_for_next_instruction();
                 return BusOperation::Write(addr, self.x);
             }
             Instruction::Txa => {
@@ -780,9 +762,7 @@ impl Mos6510 {
                 } else {
                     self.addr_latch
                 };
-                self.cycle = 0;
-                self.value_latch = 0;
-                self.addr_latch = 0;
+                self.prepare_for_next_instruction();
                 return BusOperation::Write(addr, val);
             }
             Instruction::Ldx => {
@@ -811,9 +791,7 @@ impl Mos6510 {
                         let res = self.value_latch.wrapping_sub(1);
                         self.set_nz_flags(res);
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
                     _ => unreachable!("Unexpected INC execution cycle {}", self.cycle),
@@ -829,9 +807,7 @@ impl Mos6510 {
                         let res = self.value_latch.wrapping_add(1);
                         self.set_nz_flags(res);
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
                     _ => unreachable!("Unexpected INC execution cycle {}", self.cycle),
@@ -852,9 +828,7 @@ impl Mos6510 {
                         let carry = self.value_latch & 0x80 != 0;
                         let res = self.value_latch << 1;
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         self.a |= res;
                         self.set_nz_flags(self.a);
                         self.set_carry(carry);
@@ -878,9 +852,7 @@ impl Mos6510 {
                         let carry = self.value_latch & 0x80 != 0;
                         let res = (self.value_latch << 1) | old_carry;
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         self.a &= res;
                         self.set_nz_flags(self.a);
                         self.set_carry(carry);
@@ -905,9 +877,7 @@ impl Mos6510 {
                         let carry = self.value_latch & 0x01 != 0;
                         let res = self.value_latch >> 1;
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
+                        self.prepare_for_next_instruction();
                         self.a ^= res;
                         self.set_nz_flags(self.a);
                         self.set_carry(carry);
@@ -927,10 +897,7 @@ impl Mos6510 {
                         let carry = self.value_latch & 0x01 != 0;
                         let res = (self.value_latch >> 1) | if old_carry { 0x80 } else { 0x00 };
                         let addr = self.addr_latch;
-                        self.cycle = 0;
-                        self.value_latch = 0;
-                        self.addr_latch = 0;
-
+                        self.prepare_for_next_instruction();
                         self.set_carry(carry);
                         self.run_adc(res);
                         BusOperation::Write(addr, res)
@@ -981,9 +948,7 @@ impl Mos6510 {
             }
         }
 
-        self.cycle = 0;
-        self.value_latch = 0;
-        self.addr_latch = 0;
+        self.prepare_for_next_instruction();
         self.step(0xFF)
     }
 
@@ -999,6 +964,15 @@ impl Mos6510 {
             0xB4 => (Instruction::Ldy, AddressingMode::ZeroPageX),
             0xB8 => (Instruction::Clv, AddressingMode::Accumulator),
             0xBC => (Instruction::Ldy, AddressingMode::AbsoluteX),
+            // CPY
+            0xC0 => (Instruction::Cpy, AddressingMode::Immediate),
+            0xC4 => (Instruction::Cpy, AddressingMode::ZeroPage),
+            0xC8 => (Instruction::Iny, AddressingMode::Accumulator),
+            0xCC => (Instruction::Cpy, AddressingMode::Absolute),
+            0xD0 => (Instruction::Bne, AddressingMode::Relative),
+            0xD4 => (Instruction::Nop, AddressingMode::ZeroPageX),
+            0xD8 => (Instruction::Cld, AddressingMode::Accumulator),
+            0xDC => (Instruction::Nop, AddressingMode::AbsoluteX),
             // ALU block
             // ORA
             0x01 => (Instruction::Ora, AddressingMode::IndirectX),
@@ -1216,6 +1190,12 @@ impl Mos6510 {
         }
     }
 
+    fn prepare_for_next_instruction(&mut self) {
+        self.cycle = 0;
+        self.value_latch = 0;
+        self.addr_latch = 0;
+    }
+
     fn run_adc(&mut self, value: u8) {
         let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
             1
@@ -1258,6 +1238,38 @@ impl Mos6510 {
             self.a = (high as u8) | low;
             self.set_carry(decimal_carry);
         }
+    }
+
+    fn branch(&mut self, condition: bool) -> BusOperation {
+        match self.cycle {
+            INSTRUCTION_EXECUTION_PHASE => {
+                if condition {
+                    self.addr_latch = if self.value_latch >= 128 {
+                        self.pc
+                            .wrapping_sub(1)
+                            .wrapping_sub(0xFF - self.value_latch as u16)
+                    } else {
+                        self.pc.wrapping_add(self.value_latch as u16)
+                    };
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                    return BusOperation::Read(self.pc);
+                }
+            }
+            val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                if self.pc & 0xFF00 != self.addr_latch & 0xFF00 {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 2;
+                    return BusOperation::Read((self.pc & 0xFF00) | (self.addr_latch & 0x00FF));
+                }
+                self.pc = self.addr_latch;
+            }
+            val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
+                self.pc = self.addr_latch;
+            }
+            _ => unreachable!("Unexpected BCS execution cycle {}", self.cycle),
+        }
+
+        self.prepare_for_next_instruction();
+        self.step(0xFF)
     }
 }
 
@@ -1416,6 +1428,14 @@ mod tests {
         test_ldy_zero_x   => "b4.json",
         test_clv          => "b8.json",
         test_ldy_abs_x    => "bc.json",
+        test_cpy_ind_x    => "c0.json",
+        test_cpy_zero     => "c4.json",
+        test_iny          => "c8.json",
+        test_cpy_abs      => "cc.json",
+        test_bne          => "d0.json",
+        test_nop_d4       => "d4.json",
+        test_cld          => "d8.json",
+        test_nop_dc       => "dc.json",
         test_ora_ind_x    => "01.json",
         test_ora_zero     => "05.json",
         test_ora_imm      => "09.json",
