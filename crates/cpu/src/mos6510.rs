@@ -33,6 +33,7 @@ enum Instruction {
     Ora,
     And,
     Eor,
+    Adc,
     Nop,
     Sta,
     Lda,
@@ -65,6 +66,7 @@ impl Instruction {
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
+            Self::Adc => false,
             Self::Nop => false,
             Self::Sta => true,
             Self::Lda => false,
@@ -97,6 +99,7 @@ impl Instruction {
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
+            Self::Adc => false,
             Self::Nop => false,
             Self::Sta => false,
             Self::Lda => false,
@@ -498,6 +501,58 @@ impl Mos6510 {
                 self.a ^= self.value_latch;
                 self.set_nz_flags(self.a);
             }
+            Instruction::Adc => {
+                if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
+                    let res = (self.a as u16)
+                        + (self.value_latch as u16)
+                        + if self.p & STATUS_REGISTER_CARRY != 0 {
+                            1
+                        } else {
+                            0
+                        };
+                    self.set_overflow(self.a, self.value_latch, (res & 0xFF) as u8);
+                    self.a = (res & 0xFF) as u8;
+                    self.set_nz_flags(self.a);
+                    self.set_carry(res > 0xFF);
+                } else {
+                    let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
+                        1
+                    } else {
+                        0
+                    };
+
+                    let mut low = (self.a & 0x0F) + (self.value_latch & 0x0F) + carry;
+                    let mut high = (self.a & 0xF0) as u16
+                        + (self.value_latch & 0xF0) as u16
+                        + (if low > 9 { 0x10 } else { 0 });
+
+                    let binary_res = (self.a as u16) + (self.value_latch as u16) + carry as u16;
+                    self.set_nz_flags((binary_res & 0xFF) as u8);
+                    self.set_overflow(self.a, self.value_latch, high as u8);
+
+                    if high & 0x80 != 0 {
+                        self.p |= STATUS_REGISTER_NEGATIVE;
+                    } else {
+                        self.p &= !STATUS_REGISTER_NEGATIVE;
+                    }
+
+                    if low > 9 {
+                        low = (low + 6) & 0x0F;
+                    } else {
+                        low = low & 0x0F;
+                    }
+
+                    let decimal_carry = high > 0x90;
+                    if decimal_carry {
+                        high = (high + 0x60) & 0xF0;
+                    } else {
+                        high = high & 0xF0;
+                    }
+
+                    self.a = (high as u8) | low;
+                    self.set_carry(decimal_carry);
+                }
+            }
             Instruction::Nop => {
                 self.cycle = 0;
                 self.value_latch = 0;
@@ -516,9 +571,9 @@ impl Mos6510 {
                 self.set_nz_flags(self.a);
             }
             Instruction::Cmp => {
-                let (res, overflow) = self.a.overflowing_sub(self.value_latch);
+                let (res, carry) = self.a.overflowing_sub(self.value_latch);
                 self.set_nz_flags(res);
-                self.set_carry(!overflow);
+                self.set_carry(!carry);
             }
             Instruction::Jam => {
                 self.cycle = 0;
@@ -751,7 +806,7 @@ impl Mos6510 {
                         BusOperation::Write(self.addr_latch, self.value_latch)
                     }
                     val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
-                        let overflow = self.value_latch & 0x80 != 0;
+                        let carry = self.value_latch & 0x80 != 0;
                         let res = self.value_latch << 1;
                         let addr = self.addr_latch;
                         self.cycle = 0;
@@ -759,7 +814,7 @@ impl Mos6510 {
                         self.addr_latch = 0;
                         self.a |= res;
                         self.set_nz_flags(self.a);
-                        self.set_carry(overflow);
+                        self.set_carry(carry);
                         BusOperation::Write(addr, res)
                     }
                     _ => unreachable!("Unexpected SLO execution cycle {}", self.cycle),
@@ -777,7 +832,7 @@ impl Mos6510 {
                         } else {
                             0
                         };
-                        let overflow = self.value_latch & 0x80 != 0;
+                        let carry = self.value_latch & 0x80 != 0;
                         let res = (self.value_latch << 1) | old_carry;
                         let addr = self.addr_latch;
                         self.cycle = 0;
@@ -785,7 +840,7 @@ impl Mos6510 {
                         self.addr_latch = 0;
                         self.a &= res;
                         self.set_nz_flags(self.a);
-                        self.set_carry(overflow);
+                        self.set_carry(carry);
                         BusOperation::Write(addr, res)
                     }
                     _ => unreachable!("Unexpected RLA execution cycle {}", self.cycle),
@@ -804,7 +859,7 @@ impl Mos6510 {
                         BusOperation::Write(self.addr_latch, self.value_latch)
                     }
                     val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
-                        let overflow = self.value_latch & 0x01 != 0;
+                        let carry = self.value_latch & 0x01 != 0;
                         let res = self.value_latch >> 1;
                         let addr = self.addr_latch;
                         self.cycle = 0;
@@ -812,7 +867,7 @@ impl Mos6510 {
                         self.addr_latch = 0;
                         self.a ^= res;
                         self.set_nz_flags(self.a);
-                        self.set_carry(overflow);
+                        self.set_carry(carry);
                         BusOperation::Write(addr, res)
                     }
                     _ => unreachable!("Unexpected SRE execution cycle {}", self.cycle),
@@ -856,6 +911,15 @@ impl Mos6510 {
             0x55 => (Instruction::Eor, AddressingMode::ZeroPageX),
             0x59 => (Instruction::Eor, AddressingMode::AbsoluteY),
             0x5D => (Instruction::Eor, AddressingMode::AbsoluteX),
+            // ADC
+            0x61 => (Instruction::Adc, AddressingMode::IndirectX),
+            0x65 => (Instruction::Adc, AddressingMode::ZeroPage),
+            0x69 => (Instruction::Adc, AddressingMode::Immediate),
+            0x6D => (Instruction::Adc, AddressingMode::Absolute),
+            0x71 => (Instruction::Adc, AddressingMode::IndirectY),
+            0x75 => (Instruction::Adc, AddressingMode::ZeroPageX),
+            0x79 => (Instruction::Adc, AddressingMode::AbsoluteY),
+            0x7D => (Instruction::Adc, AddressingMode::AbsoluteX),
             // STA
             0x81 => (Instruction::Sta, AddressingMode::IndirectX),
             0x85 => (Instruction::Sta, AddressingMode::ZeroPage),
@@ -1001,11 +1065,20 @@ impl Mos6510 {
         }
     }
 
-    fn set_carry(&mut self, overflow: bool) {
-        if overflow {
+    fn set_carry(&mut self, carry: bool) {
+        if carry {
             self.p |= STATUS_REGISTER_CARRY;
         } else {
             self.p &= !STATUS_REGISTER_CARRY;
+        }
+    }
+
+    fn set_overflow(&mut self, a: u8, b: u8, res: u8) {
+        let overflow = ((a ^ res) & (b ^ res) & 0x80) != 0;
+        if overflow {
+            self.p |= STATUS_REGISTER_OVERFLOW;
+        } else {
+            self.p &= !STATUS_REGISTER_OVERFLOW;
         }
     }
 }
@@ -1181,6 +1254,14 @@ mod tests {
         test_eor_zero_x   => "55.json",
         test_eor_abs_y    => "59.json",
         test_eor_abs_x    => "5d.json",
+        test_adc_ind_x    => "61.json",
+        test_adc_zero     => "65.json",
+        test_adc_imm      => "69.json",
+        test_adc_abs      => "6d.json",
+        test_adc_ind_y    => "71.json",
+        test_adc_zero_x   => "75.json",
+        test_adc_abs_y    => "79.json",
+        test_adc_abs_x    => "7d.json",
         test_sta_ind_x    => "81.json",
         test_sta_zero     => "85.json",
         test_nop_89       => "89.json",
