@@ -30,6 +30,10 @@ enum AddressModeProcessingResult {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Instruction {
+    Rti,
+    Pha,
+    Bvc,
+    Cli,
     Rts,
     Pla,
     Jmp,
@@ -97,9 +101,13 @@ enum Instruction {
 impl Instruction {
     fn is_writing(&self) -> bool {
         match self {
+            Self::Rti => false,
+            Self::Pha => false,
+            Self::Bvc => false,
+            Self::Cli => false,
             Self::Rts => false,
             Self::Pla => false,
-            Self::Jmp => false,
+            Self::Jmp => true,
             Self::Bvs => false,
             Self::Sei => false,
             Self::Sty => true,
@@ -164,6 +172,10 @@ impl Instruction {
 
     fn is_reading_and_writing(&self) -> bool {
         match self {
+            Self::Rti => false,
+            Self::Pha => false,
+            Self::Bvc => false,
+            Self::Cli => false,
             Self::Rts => false,
             Self::Pla => false,
             Self::Jmp => false,
@@ -625,6 +637,50 @@ impl Mos6510 {
         }
 
         match self.instruction {
+            Instruction::Rti => match self.cycle {
+                INSTRUCTION_EXECUTION_PHASE => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                    return BusOperation::Read(self.pc);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 2;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 3;
+                    self.s = self.s.wrapping_add(1);
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 3 => {
+                    self.p = (data_in | STATUS_REGISTER_UNUSED) & !STATUS_REGISTER_BREAK;
+                    self.s = self.s.wrapping_add(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 4;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 4 => {
+                    self.addr_latch = data_in as u16;
+                    self.s = self.s.wrapping_add(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 5;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 5 => {
+                    self.addr_latch |= (data_in as u16) << 8;
+                    self.pc = self.addr_latch;
+                    self.prepare_for_next_instruction();
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                _ => unreachable!("Unexpected RTI execution cycle {}", self.cycle),
+            },
+            Instruction::Pha => {
+                let addr = 0x0100 | self.s as u16;
+                self.s = self.s.wrapping_sub(1);
+                self.prepare_for_next_instruction();
+                return BusOperation::Write(addr, self.a);
+            }
+            Instruction::Bvc => return self.branch(self.p & STATUS_REGISTER_OVERFLOW == 0),
+            Instruction::Cli => {
+                self.p &= !STATUS_REGISTER_INTERRUPT_DISABLE;
+            }
             Instruction::Rts => match self.cycle {
                 INSTRUCTION_EXECUTION_PHASE => {
                     self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
@@ -1212,6 +1268,15 @@ impl Mos6510 {
     fn decode_instruction(&mut self, opcode: u8) {
         (self.instruction, self.addressing_mode) = match opcode {
             // Control Instructions block
+            // RTI, NOP, PHA, JMP, BVC, NOP, CLI, NOP
+            0x40 => (Instruction::Rti, AddressingMode::Implied),
+            0x44 => (Instruction::Nop, AddressingMode::ZeroPage),
+            0x48 => (Instruction::Pha, AddressingMode::Accumulator),
+            0x4C => (Instruction::Jmp, AddressingMode::Absolute),
+            0x50 => (Instruction::Bvc, AddressingMode::Relative),
+            0x54 => (Instruction::Nop, AddressingMode::ZeroPageX),
+            0x58 => (Instruction::Cli, AddressingMode::Accumulator),
+            0x5C => (Instruction::Nop, AddressingMode::AbsoluteX),
             // RTS, PLA, JMP, BVS, SEI
             0x60 => (Instruction::Rts, AddressingMode::Implied),
             0x64 => (Instruction::Nop, AddressingMode::ZeroPage),
@@ -1774,6 +1839,14 @@ mod tests {
     }
 
     mos6502_tests! {
+        test_rti          => "40.json",
+        test_nop_44       => "44.json",
+        test_pha          => "48.json",
+        test_jmp_abs      => "4c.json",
+        test_bvc          => "50.json",
+        test_nop_54       => "54.json",
+        test_cli          => "58.json",
+        test_nop_5c       => "5c.json",
         test_rts          => "60.json",
         test_nop_64       => "64.json",
         test_pla          => "68.json",
