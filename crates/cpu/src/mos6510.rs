@@ -38,6 +38,10 @@ enum Instruction {
     Iny,
     Bne,
     Cld,
+    Cpx,
+    Inx,
+    Beq,
+    Sed,
     Ora,
     And,
     Eor,
@@ -82,6 +86,10 @@ impl Instruction {
             Self::Iny => false,
             Self::Bne => false,
             Self::Cld => false,
+            Self::Cpx => false,
+            Self::Inx => false,
+            Self::Beq => false,
+            Self::Sed => false,
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
@@ -126,6 +134,10 @@ impl Instruction {
             Self::Iny => false,
             Self::Bne => false,
             Self::Cld => false,
+            Self::Cpx => false,
+            Self::Inx => false,
+            Self::Beq => false,
+            Self::Sed => false,
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
@@ -542,6 +554,17 @@ impl Mos6510 {
             }
             Instruction::Bne => return self.branch(self.p & STATUS_REGISTER_ZERO == 0),
             Instruction::Cld => self.p &= !STATUS_REGISTER_DECIMAL_MODE,
+            Instruction::Cpx => {
+                let (res, carry) = self.x.overflowing_sub(self.value_latch);
+                self.set_nz_flags(res);
+                self.set_carry(!carry);
+            }
+            Instruction::Inx => {
+                self.x = self.x.wrapping_add(1);
+                self.set_nz_flags(self.x);
+            }
+            Instruction::Beq => return self.branch(self.p & STATUS_REGISTER_ZERO != 0),
+            Instruction::Sed => self.p |= STATUS_REGISTER_DECIMAL_MODE,
             Instruction::Ora => {
                 self.a |= self.value_latch;
                 self.set_nz_flags(self.a);
@@ -973,6 +996,15 @@ impl Mos6510 {
             0xD4 => (Instruction::Nop, AddressingMode::ZeroPageX),
             0xD8 => (Instruction::Cld, AddressingMode::Accumulator),
             0xDC => (Instruction::Nop, AddressingMode::AbsoluteX),
+            // CPX
+            0xE0 => (Instruction::Cpx, AddressingMode::Immediate),
+            0xE4 => (Instruction::Cpx, AddressingMode::ZeroPage),
+            0xE8 => (Instruction::Inx, AddressingMode::Accumulator),
+            0xEC => (Instruction::Cpx, AddressingMode::Absolute),
+            0xF0 => (Instruction::Beq, AddressingMode::Relative),
+            0xF4 => (Instruction::Nop, AddressingMode::ZeroPageX),
+            0xF8 => (Instruction::Sed, AddressingMode::Accumulator),
+            0xFC => (Instruction::Nop, AddressingMode::AbsoluteX),
             // ALU block
             // ORA
             0x01 => (Instruction::Ora, AddressingMode::IndirectX),
@@ -1436,6 +1468,14 @@ mod tests {
         test_nop_d4       => "d4.json",
         test_cld          => "d8.json",
         test_nop_dc       => "dc.json",
+        test_cpx_ind_x    => "e0.json",
+        test_cpx_zero     => "e4.json",
+        test_inx          => "e8.json",
+        test_cpx_abs      => "ec.json",
+        test_beq          => "f0.json",
+        test_nop_f4       => "f4.json",
+        test_sed          => "f8.json",
+        test_nop_fc       => "fc.json",
         test_ora_ind_x    => "01.json",
         test_ora_zero     => "05.json",
         test_ora_imm      => "09.json",
