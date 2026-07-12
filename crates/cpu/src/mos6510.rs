@@ -33,6 +33,20 @@ enum Instruction {
     Eor,
     Lda,
     Cmp,
+    Rla,
+}
+
+impl Instruction {
+    fn is_writing(&self) -> bool {
+        match self {
+            Instruction::Ora => false,
+            Instruction::And => false,
+            Instruction::Eor => false,
+            Instruction::Lda => false,
+            Instruction::Cmp => false,
+            Instruction::Rla => true,
+        }
+    }
 }
 
 const STATUS_REGISTER_CARRY: u8 = 0x01;
@@ -44,13 +58,15 @@ const STATUS_REGISTER_UNUSED: u8 = 0x20;
 const STATUS_REGISTER_OVERFLOW: u8 = 0x40;
 const STATUS_REGISTER_NEGATIVE: u8 = 0x80;
 
+const INSTRUCTION_EXECUTION_PHASE: u8 = 200;
+
 #[derive(PartialEq, Eq, Debug)]
 pub struct Mos6510 {
     a: u8,
     x: u8,
     y: u8,
     p: u8,
-    sp: u16,
+    s: u8,
     pc: u16,
     cycle: u8,
     instruction: Instruction,
@@ -66,7 +82,7 @@ impl Mos6510 {
             x: 0,
             y: 0,
             p: 0,
-            sp: 0,
+            s: 0,
             pc: 0,
             cycle: 0,
             instruction: Instruction::Ora,
@@ -96,6 +112,10 @@ impl Mos6510 {
     }
 
     fn step_addressing(&mut self, data_in: u8) -> AddressModeProcessingResult {
+        if self.cycle >= INSTRUCTION_EXECUTION_PHASE {
+            return AddressModeProcessingResult::Finished;
+        }
+
         match self.addressing_mode {
             AddressingMode::Implied => todo!(),
             AddressingMode::Accumulator => todo!(),
@@ -110,7 +130,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for Immediate addressing mode {}",
                     self.cycle
                 ),
@@ -131,7 +151,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for ZeroPage addressing mode {}",
                     self.cycle
                 ),
@@ -157,7 +177,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for ZeroPage addressing mode {}",
                     self.cycle
                 ),
@@ -186,7 +206,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for Absolute addressing mode {}",
                     self.cycle
                 ),
@@ -214,8 +234,9 @@ impl Mos6510 {
                     ))
                 }
                 4 => {
-                    if self.addr_latch.wrapping_add(self.x as u16) & 0xFF00
-                        == self.addr_latch & 0xFF00
+                    if !self.instruction.is_writing()
+                        && self.addr_latch.wrapping_add(self.x as u16) & 0xFF00
+                            == self.addr_latch & 0xFF00
                     {
                         self.value_latch = data_in;
                         AddressModeProcessingResult::Finished
@@ -229,7 +250,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for AbsoluteX addressing mode {}",
                     self.cycle
                 ),
@@ -257,8 +278,9 @@ impl Mos6510 {
                     ))
                 }
                 4 => {
-                    if self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
-                        == self.addr_latch & 0xFF00
+                    if !self.instruction.is_writing()
+                        && self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
+                            == self.addr_latch & 0xFF00
                     {
                         self.value_latch = data_in;
                         AddressModeProcessingResult::Finished
@@ -272,7 +294,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for AbsoluteY addressing mode {}",
                     self.cycle
                 ),
@@ -296,7 +318,7 @@ impl Mos6510 {
                     AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
                 }
                 4 => {
-                    let addr = (self.addr_latch as u8 & 0xFF).wrapping_add(1) as u16;
+                    let addr = (self.addr_latch as u8).wrapping_add(1) as u16;
                     self.cycle = 5;
                     self.addr_latch = data_in as u16;
                     AddressModeProcessingResult::Operation(BusOperation::Read(addr))
@@ -310,7 +332,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for IndirectX addressing mode {}",
                     self.cycle
                 ),
@@ -328,7 +350,7 @@ impl Mos6510 {
                     AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
                 }
                 3 => {
-                    let addr = (self.addr_latch as u8 & 0xFF).wrapping_add(1) as u16;
+                    let addr = (self.addr_latch as u8).wrapping_add(1) as u16;
                     self.cycle = 4;
                     self.addr_latch = data_in as u16;
                     AddressModeProcessingResult::Operation(BusOperation::Read(addr))
@@ -342,8 +364,9 @@ impl Mos6510 {
                     ))
                 }
                 5 => {
-                    if self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
-                        == self.addr_latch & 0xFF00
+                    if !self.instruction.is_writing()
+                        && self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
+                            == self.addr_latch & 0xFF00
                     {
                         self.value_latch = data_in;
                         AddressModeProcessingResult::Finished
@@ -357,7 +380,7 @@ impl Mos6510 {
                     self.value_latch = data_in;
                     AddressModeProcessingResult::Finished
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected cycle for IndirectY addressing mode {}",
                     self.cycle
                 ),
@@ -388,6 +411,36 @@ impl Mos6510 {
                 let (res, overflow) = self.a.overflowing_sub(self.value_latch);
                 self.set_nz_flags(res);
                 self.set_carry(!overflow);
+            }
+            Instruction::Rla => {
+                if self.cycle < INSTRUCTION_EXECUTION_PHASE {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE;
+                }
+
+                return match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        BusOperation::Write(self.addr_latch, self.value_latch)
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let old_carry = if self.p & STATUS_REGISTER_CARRY != 0 {
+                            1
+                        } else {
+                            0
+                        };
+                        let overflow = self.value_latch & 0x80 != 0;
+                        let res = (self.value_latch << 1) | old_carry;
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        self.a &= res;
+                        self.set_nz_flags(self.a);
+                        self.set_carry(overflow);
+                        BusOperation::Write(addr, res)
+                    }
+                    _ => unreachable!("Unexpected RLA execution cycle {}", self.cycle),
+                };
             }
         }
 
@@ -445,7 +498,17 @@ impl Mos6510 {
             0xD5 => (Instruction::Cmp, AddressingMode::ZeroPageX),
             0xD9 => (Instruction::Cmp, AddressingMode::AbsoluteY),
             0xDD => (Instruction::Cmp, AddressingMode::AbsoluteX),
-            _ => todo!("Unsupported opcode {:#02X}", opcode & 0x1f),
+            // Unofficial instructions block
+            // RLA
+            0x23 => (Instruction::Rla, AddressingMode::IndirectX),
+            0x27 => (Instruction::Rla, AddressingMode::ZeroPage),
+            0x2B => (Instruction::Rla, AddressingMode::Immediate),
+            0x2F => (Instruction::Rla, AddressingMode::Absolute),
+            0x33 => (Instruction::Rla, AddressingMode::IndirectY),
+            0x37 => (Instruction::Rla, AddressingMode::ZeroPageX),
+            0x3B => (Instruction::Rla, AddressingMode::AbsoluteY),
+            0x3F => (Instruction::Rla, AddressingMode::AbsoluteX),
+            _ => todo!("Unsupported opcode {:#02X}", opcode),
         };
     }
 
@@ -482,7 +545,7 @@ mod tests {
     #[derive(Deserialize)]
     struct TestCaseState {
         pc: u16,
-        s: u16,
+        s: u8,
         a: u8,
         x: u8,
         y: u8,
@@ -495,7 +558,7 @@ mod tests {
             let mut cpu = Mos6510::init();
 
             cpu.pc = self.pc;
-            cpu.sp = self.s;
+            cpu.s = self.s;
             cpu.a = self.a;
             cpu.x = self.x;
             cpu.y = self.y;
@@ -566,6 +629,7 @@ mod tests {
                             "Test case '{}': Read address doesn't match",
                             case.name
                         );
+                        assert_eq!(Some(&value), memory.get(cpu_read_addr));
                         request = cpu.step(value);
                     }
                     (
@@ -654,5 +718,14 @@ mod tests {
         test_cmp_zero_x   => "d5.json",
         test_cmp_abs_y    => "d9.json",
         test_cmp_abs_x    => "dd.json",
+        test_rla_ind_x    => "23.json",
+        test_rla_zero     => "27.json",
+        // TODO: ANC
+        // test_rla_imm      => "2b.json",
+        test_rla_abs      => "2f.json",
+        test_rla_ind_y    => "33.json",
+        test_rla_zero_x   => "37.json",
+        test_rla_abs_y    => "3b.json",
+        test_rla_abs_x    => "3f.json",
     }
 }
