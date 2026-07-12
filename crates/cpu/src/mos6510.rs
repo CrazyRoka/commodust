@@ -1,3 +1,5 @@
+use crate::mos6510::AddressingMode::AbsoluteX;
+
 #[derive(Debug)]
 pub enum BusOperation {
     Read(u16),
@@ -40,6 +42,9 @@ enum Instruction {
     Rol,
     Lsr,
     Ror,
+    Ldx,
+    Tax,
+    Tsx,
     Dex,
     Dec,
     Inc,
@@ -65,6 +70,9 @@ impl Instruction {
             Self::Rol => false,
             Self::Lsr => false,
             Self::Ror => false,
+            Self::Ldx => false,
+            Self::Tax => false,
+            Self::Tsx => false,
             Self::Dex => false,
             Self::Dec => false,
             Self::Inc => false,
@@ -91,6 +99,9 @@ impl Instruction {
             Self::Lsr => true,
             Self::Ror => true,
             Self::Dex => true,
+            Self::Ldx => false,
+            Self::Tax => false,
+            Self::Tsx => false,
             Self::Dec => true,
             Self::Inc => true,
             Self::Anc => false,
@@ -240,7 +251,7 @@ impl Mos6510 {
                     self.cycle
                 ),
             },
-            AddressingMode::ZeroPageX => match self.cycle {
+            AddressingMode::ZeroPageX | AddressingMode::ZeroPageY => match self.cycle {
                 1 => {
                     let addr = self.pc;
                     self.pc = self.pc.wrapping_add(1);
@@ -254,7 +265,12 @@ impl Mos6510 {
                 }
                 3 => {
                     self.cycle = 4;
-                    self.addr_latch = (self.addr_latch as u8).wrapping_add(self.x) as u16;
+                    let add = if self.addressing_mode == AddressingMode::ZeroPageX {
+                        self.x
+                    } else {
+                        self.y
+                    };
+                    self.addr_latch = (self.addr_latch as u8).wrapping_add(add) as u16;
                     if self.instruction.is_writing() {
                         AddressModeProcessingResult::Finished
                     } else {
@@ -266,11 +282,10 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => unreachable!(
-                    "Unexpected cycle for ZeroPage addressing mode {}",
-                    self.cycle
+                    "Unexpected cycle for {:?} addressing mode {}",
+                    self.addressing_mode, self.cycle
                 ),
             },
-            AddressingMode::ZeroPageY => todo!(),
             AddressingMode::Absolute => match self.cycle {
                 1 => {
                     let addr = self.pc;
@@ -303,96 +318,61 @@ impl Mos6510 {
                     self.cycle
                 ),
             },
-            AddressingMode::AbsoluteX => match self.cycle {
-                1 => {
-                    let addr = self.pc;
-                    self.pc = self.pc.wrapping_add(1);
-                    self.cycle = 2;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
-                }
-                2 => {
-                    let addr = self.pc;
-                    self.pc = self.pc.wrapping_add(1);
-                    self.cycle = 3;
-                    self.addr_latch = data_in as u16;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
-                }
-                3 => {
-                    self.cycle = 4;
-                    self.addr_latch |= (data_in as u16) << 8;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(
-                        (self.addr_latch & 0xFF00)
-                            | ((self.addr_latch & 0x00FF) as u8).wrapping_add(self.x) as u16,
-                    ))
-                }
-                4 => {
-                    let page_cross = self.addr_latch.wrapping_add(self.x as u16) & 0xFF00
-                        == self.addr_latch & 0xFF00;
-                    self.addr_latch = self.addr_latch.wrapping_add(self.x as u16);
-                    if !self.instruction.is_reading_and_writing() && page_cross
-                        || self.instruction.is_writing()
-                    {
+            AddressingMode::AbsoluteX | AddressingMode::AbsoluteY => {
+                let add = if self.addressing_mode == AbsoluteX {
+                    self.x
+                } else {
+                    self.y
+                };
+                match self.cycle {
+                    1 => {
+                        let addr = self.pc;
+                        self.pc = self.pc.wrapping_add(1);
+                        self.cycle = 2;
+                        AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                    }
+                    2 => {
+                        let addr = self.pc;
+                        self.pc = self.pc.wrapping_add(1);
+                        self.cycle = 3;
+                        self.addr_latch = data_in as u16;
+                        AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                    }
+                    3 => {
+                        self.cycle = 4;
+                        self.addr_latch |= (data_in as u16) << 8;
+
+                        AddressModeProcessingResult::Operation(BusOperation::Read(
+                            (self.addr_latch & 0xFF00)
+                                | ((self.addr_latch & 0x00FF) as u8).wrapping_add(add) as u16,
+                        ))
+                    }
+                    4 => {
+                        let page_cross = self.addr_latch.wrapping_add(add as u16) & 0xFF00
+                            == self.addr_latch & 0xFF00;
+                        self.addr_latch = self.addr_latch.wrapping_add(add as u16);
+                        if !self.instruction.is_reading_and_writing() && page_cross
+                            || self.instruction.is_writing()
+                        {
+                            self.value_latch = data_in;
+                            AddressModeProcessingResult::Finished
+                        } else {
+                            self.cycle = 5;
+                            AddressModeProcessingResult::Operation(BusOperation::Read(
+                                self.addr_latch,
+                            ))
+                        }
+                    }
+                    5 => {
                         self.value_latch = data_in;
                         AddressModeProcessingResult::Finished
-                    } else {
-                        self.cycle = 5;
-                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
                     }
+                    _ => unreachable!(
+                        "Unexpected cycle for {:?} addressing mode {}",
+                        self.addressing_mode, self.cycle
+                    ),
                 }
-                5 => {
-                    self.value_latch = data_in;
-                    AddressModeProcessingResult::Finished
-                }
-                _ => unreachable!(
-                    "Unexpected cycle for AbsoluteX addressing mode {}",
-                    self.cycle
-                ),
-            },
-            AddressingMode::AbsoluteY => match self.cycle {
-                1 => {
-                    let addr = self.pc;
-                    self.pc = self.pc.wrapping_add(1);
-                    self.cycle = 2;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
-                }
-                2 => {
-                    let addr = self.pc;
-                    self.pc = self.pc.wrapping_add(1);
-                    self.cycle = 3;
-                    self.addr_latch = data_in as u16;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
-                }
-                3 => {
-                    self.cycle = 4;
-                    self.addr_latch |= (data_in as u16) << 8;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(
-                        (self.addr_latch & 0xFF00)
-                            | ((self.addr_latch & 0x00FF) as u8).wrapping_add(self.y) as u16,
-                    ))
-                }
-                4 => {
-                    let page_cross = self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
-                        == self.addr_latch & 0xFF00;
-                    self.addr_latch = self.addr_latch.wrapping_add(self.y as u16);
-                    if !self.instruction.is_reading_and_writing() && page_cross
-                        || self.instruction.is_writing()
-                    {
-                        self.value_latch = data_in;
-                        AddressModeProcessingResult::Finished
-                    } else {
-                        self.cycle = 5;
-                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
-                    }
-                }
-                5 => {
-                    self.value_latch = data_in;
-                    AddressModeProcessingResult::Finished
-                }
-                _ => unreachable!(
-                    "Unexpected cycle for AbsoluteY addressing mode {}",
-                    self.cycle
-                ),
-            },
+            }
             AddressingMode::Indirect => todo!(),
             AddressingMode::IndirectX => match self.cycle {
                 1 => {
@@ -431,8 +411,8 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => unreachable!(
-                    "Unexpected cycle for IndirectX addressing mode {}",
-                    self.cycle
+                    "Unexpected cycle for {:?} addressing mode {}",
+                    self.addressing_mode, self.cycle
                 ),
             },
             AddressingMode::IndirectY => match self.cycle {
@@ -480,8 +460,8 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => unreachable!(
-                    "Unexpected cycle for IndirectY addressing mode {}",
-                    self.cycle
+                    "Unexpected cycle for {:?} addressing mode {}",
+                    self.addressing_mode, self.cycle
                 ),
             },
             AddressingMode::Relative => todo!(),
@@ -666,6 +646,18 @@ impl Mos6510 {
                     }
                     _ => unreachable!("Unexpected ROR execution cycle {}", self.cycle),
                 };
+            }
+            Instruction::Ldx => {
+                self.x = self.value_latch;
+                self.set_nz_flags(self.x);
+            }
+            Instruction::Tax => {
+                self.x = self.a;
+                self.set_nz_flags(self.x);
+            }
+            Instruction::Tsx => {
+                self.x = self.s;
+                self.set_nz_flags(self.x);
             }
             Instruction::Dex => {
                 self.x = self.x.wrapping_sub(1);
@@ -888,6 +880,15 @@ impl Mos6510 {
             0x76 => (Instruction::Ror, AddressingMode::ZeroPageX),
             0x7A => (Instruction::Nop, AddressingMode::Implied),
             0x7E => (Instruction::Ror, AddressingMode::AbsoluteX),
+            // LDX
+            0xA2 => (Instruction::Ldx, AddressingMode::Immediate),
+            0xA6 => (Instruction::Ldx, AddressingMode::ZeroPage),
+            0xAA => (Instruction::Tax, AddressingMode::Accumulator),
+            0xAE => (Instruction::Ldx, AddressingMode::Absolute),
+            0xB2 => (Instruction::Jam, AddressingMode::Implied),
+            0xB6 => (Instruction::Ldx, AddressingMode::ZeroPageY),
+            0xBA => (Instruction::Tsx, AddressingMode::Accumulator),
+            0xBE => (Instruction::Ldx, AddressingMode::AbsoluteY),
             // DEC
             0xC2 => (Instruction::Nop, AddressingMode::Immediate),
             0xC6 => (Instruction::Dec, AddressingMode::ZeroPage),
@@ -1187,6 +1188,14 @@ mod tests {
         test_ror_zero_x   => "76.json",
         test_nop_7a       => "7a.json",
         test_ror_abs_x    => "7e.json",
+        test_ldx_82       => "a2.json",
+        test_ldx_zero     => "a6.json",
+        test_tax          => "aa.json",
+        test_ldx_abs      => "ae.json",
+        test_jam_92       => "b2.json",
+        test_ldx_zero_y   => "b6.json",
+        test_tsx          => "ba.json",
+        test_ldx_abs_y    => "be.json",
         test_nop_c2       => "c2.json",
         test_dec_zero     => "c6.json",
         test_dex          => "ca.json",
