@@ -33,6 +33,7 @@ enum Instruction {
     Eor,
     Lda,
     Cmp,
+    Anc,
     Slo,
     Rla,
 }
@@ -45,6 +46,7 @@ impl Instruction {
             Instruction::Eor => false,
             Instruction::Lda => false,
             Instruction::Cmp => false,
+            Instruction::Anc => false,
             Instruction::Slo => true,
             Instruction::Rla => true,
         }
@@ -418,6 +420,11 @@ impl Mos6510 {
                 self.set_nz_flags(res);
                 self.set_carry(!overflow);
             }
+            Instruction::Anc => {
+                self.a &= self.value_latch;
+                self.set_nz_flags(self.a);
+                self.set_carry(self.p & STATUS_REGISTER_NEGATIVE != 0);
+            }
             Instruction::Slo => {
                 return match self.cycle {
                     INSTRUCTION_EXECUTION_PHASE => {
@@ -525,8 +532,7 @@ impl Mos6510 {
             // SLO
             0x03 => (Instruction::Slo, AddressingMode::IndirectX),
             0x07 => (Instruction::Slo, AddressingMode::ZeroPage),
-            // TODO: ANC
-            // 0x0B => (Instruction::Slo, AddressingMode::Immediate),
+            0x0B => (Instruction::Anc, AddressingMode::Immediate),
             0x0F => (Instruction::Slo, AddressingMode::Absolute),
             0x13 => (Instruction::Slo, AddressingMode::IndirectY),
             0x17 => (Instruction::Slo, AddressingMode::ZeroPageX),
@@ -535,8 +541,7 @@ impl Mos6510 {
             // RLA
             0x23 => (Instruction::Rla, AddressingMode::IndirectX),
             0x27 => (Instruction::Rla, AddressingMode::ZeroPage),
-            // TODO: ANC
-            // 0x2B => (Instruction::Rla, AddressingMode::Immediate),
+            0x2B => (Instruction::Anc, AddressingMode::Immediate),
             0x2F => (Instruction::Rla, AddressingMode::Absolute),
             0x33 => (Instruction::Rla, AddressingMode::IndirectY),
             0x37 => (Instruction::Rla, AddressingMode::ZeroPageX),
@@ -754,8 +759,7 @@ mod tests {
         test_cmp_abs_x    => "dd.json",
         test_slo_ind_x    => "03.json",
         test_slo_zero     => "07.json",
-        // TODO: ANC
-        // test_slo_imm      => "0b.json",
+        test_anc_imm_0b   => "0b.json",
         test_slo_abs      => "0f.json",
         test_slo_ind_y    => "13.json",
         test_slo_zero_x   => "17.json",
@@ -763,8 +767,7 @@ mod tests {
         test_slo_abs_x    => "1f.json",
         test_rla_ind_x    => "23.json",
         test_rla_zero     => "27.json",
-        // TODO: ANC
-        // test_rla_imm      => "2b.json",
+        test_anc_imm_2b   => "2b.json",
         test_rla_abs      => "2f.json",
         test_rla_ind_y    => "33.json",
         test_rla_zero_x   => "37.json",
