@@ -37,6 +37,7 @@ enum Instruction {
     Cmp,
     Jam,
     Asl,
+    Rol,
     Anc,
     Slo,
     Rla,
@@ -56,6 +57,7 @@ impl Instruction {
             Self::Cmp => false,
             Self::Jam => false,
             Self::Asl => false,
+            Self::Rol => false,
             Self::Anc => false,
             Self::Slo => false,
             Self::Rla => false,
@@ -75,6 +77,7 @@ impl Instruction {
             Self::Cmp => false,
             Self::Jam => false,
             Self::Asl => true,
+            Self::Rol => true,
             Self::Anc => false,
             Self::Slo => true,
             Self::Rla => true,
@@ -545,6 +548,44 @@ impl Mos6510 {
                     _ => unreachable!("Unexpected ASL execution cycle {}", self.cycle),
                 };
             }
+            Instruction::Rol => {
+                match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE
+                        if self.addressing_mode == AddressingMode::Accumulator =>
+                    {
+                        let carry = self.value_latch & 0x80 != 0;
+                        self.a = (self.value_latch << 1)
+                            | if self.p & STATUS_REGISTER_CARRY != 0 {
+                                1
+                            } else {
+                                0
+                            };
+                        self.set_nz_flags(self.a);
+                        self.set_carry(carry);
+                    }
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        return BusOperation::Write(self.addr_latch, self.value_latch);
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let carry = self.value_latch & 0x80 != 0;
+                        let res = (self.value_latch << 1)
+                            | if self.p & STATUS_REGISTER_CARRY != 0 {
+                                1
+                            } else {
+                                0
+                            };
+                        self.set_nz_flags(res);
+                        self.set_carry(carry);
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        return BusOperation::Write(addr, res);
+                    }
+                    _ => unreachable!("Unexpected ROL execution cycle {}", self.cycle),
+                };
+            }
             Instruction::Anc => {
                 self.a &= self.value_latch;
                 self.set_nz_flags(self.a);
@@ -699,6 +740,15 @@ impl Mos6510 {
             0x16 => (Instruction::Asl, AddressingMode::ZeroPageX),
             0x1A => (Instruction::Nop, AddressingMode::Implied),
             0x1E => (Instruction::Asl, AddressingMode::AbsoluteX),
+            // ROL
+            0x22 => (Instruction::Jam, AddressingMode::Implied),
+            0x26 => (Instruction::Rol, AddressingMode::ZeroPage),
+            0x2A => (Instruction::Rol, AddressingMode::Accumulator),
+            0x2E => (Instruction::Rol, AddressingMode::Absolute),
+            0x32 => (Instruction::Jam, AddressingMode::Implied),
+            0x36 => (Instruction::Rol, AddressingMode::ZeroPageX),
+            0x3A => (Instruction::Nop, AddressingMode::Implied),
+            0x3E => (Instruction::Rol, AddressingMode::AbsoluteX),
             // Unofficial instructions block
             // SLO
             0x03 => (Instruction::Slo, AddressingMode::IndirectX),
@@ -956,6 +1006,14 @@ mod tests {
         test_asl_zero_x   => "16.json",
         test_nop_1a       => "1a.json",
         test_asl_abs_x    => "1e.json",
+        test_jam_22       => "22.json",
+        test_rol_zero     => "26.json",
+        test_rol_acc      => "2a.json",
+        test_rol_abs      => "2e.json",
+        test_jam_32       => "32.json",
+        test_rol_zero_x   => "36.json",
+        test_nop_3a       => "3a.json",
+        test_rol_abs_x    => "3e.json",
         test_slo_ind_x    => "03.json",
         test_slo_zero     => "07.json",
         test_anc_imm_0b   => "0b.json",
