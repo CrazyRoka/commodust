@@ -73,6 +73,8 @@ enum Instruction {
     Sre,
     Arr,
     Rra,
+    Dcp,
+    Sbx,
     Isc,
 }
 
@@ -122,6 +124,8 @@ impl Instruction {
             Self::Sre => false,
             Self::Arr => false,
             Self::Rra => false,
+            Self::Dcp => false,
+            Self::Sbx => false,
             Self::Isc => false,
         }
     }
@@ -171,6 +175,8 @@ impl Instruction {
             Self::Sre => true,
             Self::Arr => true,
             Self::Rra => true,
+            Self::Dcp => true,
+            Self::Sbx => true,
             Self::Isc => true,
         }
     }
@@ -936,6 +942,31 @@ impl Mos6510 {
                     }
                 }
             }
+            Instruction::Dcp => match self.cycle {
+                INSTRUCTION_EXECUTION_PHASE => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                    return BusOperation::Write(self.addr_latch, self.value_latch);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                    let intermediate = self.value_latch.wrapping_sub(1);
+                    let (res, carry) = self.a.overflowing_sub(intermediate);
+                    self.set_nz_flags(res);
+                    self.set_carry(!carry);
+                    let addr = self.addr_latch;
+                    self.prepare_for_next_instruction();
+                    return BusOperation::Write(addr, intermediate);
+                }
+                _ => unreachable!(
+                    "Unexpected {:?} execution cycle {}",
+                    self.instruction, self.cycle
+                ),
+            },
+            Instruction::Sbx => {
+                let (res, carry) = (self.a & self.x).overflowing_sub(self.value_latch);
+                self.x = res;
+                self.set_nz_flags(res);
+                self.set_carry(!carry);
+            }
             Instruction::Isc => {
                 return match self.cycle {
                     INSTRUCTION_EXECUTION_PHASE => {
@@ -1171,6 +1202,15 @@ impl Mos6510 {
             0x77 => (Instruction::Rra, AddressingMode::ZeroPageX),
             0x7B => (Instruction::Rra, AddressingMode::AbsoluteY),
             0x7F => (Instruction::Rra, AddressingMode::AbsoluteX),
+            // DCP
+            0xC3 => (Instruction::Dcp, AddressingMode::IndirectX),
+            0xC7 => (Instruction::Dcp, AddressingMode::ZeroPage),
+            0xCB => (Instruction::Sbx, AddressingMode::Immediate),
+            0xCF => (Instruction::Dcp, AddressingMode::Absolute),
+            0xD3 => (Instruction::Dcp, AddressingMode::IndirectY),
+            0xD7 => (Instruction::Dcp, AddressingMode::ZeroPageX),
+            0xDB => (Instruction::Dcp, AddressingMode::AbsoluteY),
+            0xDF => (Instruction::Dcp, AddressingMode::AbsoluteX),
             // ISC
             0xE3 => (Instruction::Isc, AddressingMode::IndirectX),
             0xE7 => (Instruction::Isc, AddressingMode::ZeroPage),
@@ -1662,6 +1702,14 @@ mod tests {
         test_rra_zero_x   => "77.json",
         test_rra_abs_y    => "7b.json",
         test_rra_abs_x    => "7f.json",
+        test_dcp_ind_x    => "c3.json",
+        test_dcp_zero     => "c7.json",
+        test_sbx_imm_cb   => "cb.json",
+        test_dcp_abs      => "cf.json",
+        test_dcp_ind_y    => "d3.json",
+        test_dcp_zero_x   => "d7.json",
+        test_dcp_abs_y    => "db.json",
+        test_dcp_abs_x    => "df.json",
         test_isc_ind_x    => "e3.json",
         test_isc_zero     => "e7.json",
         test_sbc_imm_eb   => "eb.json",
