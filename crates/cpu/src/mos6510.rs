@@ -73,6 +73,10 @@ enum Instruction {
     Sre,
     Arr,
     Rra,
+    Sax,
+    Ane,
+    Sha,
+    Tas,
     Lax,
     Las,
     Dcp,
@@ -126,6 +130,10 @@ impl Instruction {
             Self::Sre => false,
             Self::Arr => false,
             Self::Rra => false,
+            Self::Sax => true,
+            Self::Ane => false,
+            Self::Sha => true,
+            Self::Tas => true,
             Self::Lax => false,
             Self::Las => false,
             Self::Dcp => false,
@@ -179,6 +187,10 @@ impl Instruction {
             Self::Sre => true,
             Self::Arr => true,
             Self::Rra => true,
+            Self::Sax => false,
+            Self::Ane => false,
+            Self::Sha => false,
+            Self::Tas => false,
             Self::Lax => false,
             Self::Las => false,
             Self::Dcp => true,
@@ -948,6 +960,40 @@ impl Mos6510 {
                     }
                 }
             }
+            Instruction::Sax => {
+                let addr = self.addr_latch;
+                self.prepare_for_next_instruction();
+                return BusOperation::Write(addr, self.a & self.x);
+            }
+            Instruction::Ane => {
+                self.a = (self.a | 0xEE) & self.x & self.value_latch;
+                self.set_nz_flags(self.a);
+            }
+            Instruction::Tas => {
+                let h = (self.addr_latch.wrapping_sub(self.y as u16) >> 8) as u8;
+                let page_crossed = h != (self.addr_latch >> 8) as u8;
+                let res = self.a & self.x & h.wrapping_add(1);
+                let addr = if page_crossed {
+                    (self.addr_latch & 0x00FF) | (res as u16) << 8
+                } else {
+                    self.addr_latch
+                };
+                self.s = self.a & self.x;
+                self.prepare_for_next_instruction();
+                return BusOperation::Write(addr, res);
+            }
+            Instruction::Sha => {
+                let h = (self.addr_latch.wrapping_sub(self.y as u16) >> 8) as u8;
+                let page_crossed = h != (self.addr_latch >> 8) as u8;
+                let res = self.a & self.x & h.wrapping_add(1);
+                let addr = if page_crossed {
+                    (self.addr_latch & 0x00FF) | (res as u16) << 8
+                } else {
+                    self.addr_latch
+                };
+                self.prepare_for_next_instruction();
+                return BusOperation::Write(addr, res);
+            }
             Instruction::Lax => {
                 let value = if self.addressing_mode == AddressingMode::Immediate {
                     (self.a | 0xEE) & self.value_latch
@@ -1003,7 +1049,10 @@ impl Mos6510 {
                         self.run_sbc(res);
                         BusOperation::Write(addr, res)
                     }
-                    _ => unreachable!("Unexpected ISC execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
         }
@@ -1225,6 +1274,15 @@ impl Mos6510 {
             0x77 => (Instruction::Rra, AddressingMode::ZeroPageX),
             0x7B => (Instruction::Rra, AddressingMode::AbsoluteY),
             0x7F => (Instruction::Rra, AddressingMode::AbsoluteX),
+            // SAX
+            0x83 => (Instruction::Sax, AddressingMode::IndirectX),
+            0x87 => (Instruction::Sax, AddressingMode::ZeroPage),
+            0x8B => (Instruction::Ane, AddressingMode::Immediate),
+            0x8F => (Instruction::Sax, AddressingMode::Absolute),
+            0x93 => (Instruction::Sha, AddressingMode::IndirectY),
+            0x97 => (Instruction::Sax, AddressingMode::ZeroPageY),
+            0x9B => (Instruction::Tas, AddressingMode::AbsoluteY),
+            0x9F => (Instruction::Sha, AddressingMode::AbsoluteY),
             // LAX
             0xA3 => (Instruction::Lax, AddressingMode::IndirectX),
             0xA7 => (Instruction::Lax, AddressingMode::ZeroPage),
@@ -1734,6 +1792,14 @@ mod tests {
         test_rra_zero_x   => "77.json",
         test_rra_abs_y    => "7b.json",
         test_rra_abs_x    => "7f.json",
+        test_sax_ind_x    => "83.json",
+        test_sax_zero     => "87.json",
+        test_ane          => "8b.json",
+        test_sax_abs      => "8f.json",
+        test_sha_ind_y    => "93.json",
+        test_sax_zero_y   => "97.json",
+        test_tas          => "9b.json",
+        test_sha_abs_y    => "9f.json",
         test_lax_ind_x    => "a3.json",
         test_lax_zero     => "a7.json",
         test_lax_imm      => "ab.json",
