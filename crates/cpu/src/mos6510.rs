@@ -73,6 +73,7 @@ enum Instruction {
     Sre,
     Arr,
     Rra,
+    Isc,
 }
 
 impl Instruction {
@@ -121,6 +122,7 @@ impl Instruction {
             Self::Sre => false,
             Self::Arr => false,
             Self::Rra => false,
+            Self::Isc => false,
         }
     }
 
@@ -169,6 +171,7 @@ impl Instruction {
             Self::Sre => true,
             Self::Arr => true,
             Self::Rra => true,
+            Self::Isc => true,
         }
     }
 }
@@ -598,43 +601,7 @@ impl Mos6510 {
                 self.set_nz_flags(res);
                 self.set_carry(!carry);
             }
-            Instruction::Sbc => {
-                let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
-                    1
-                } else {
-                    0
-                };
-                let bin_res = (self.a as u16) + (!self.value_latch as u16) + carry;
-
-                let res_u8 = (bin_res & 0xFF) as u8;
-                self.set_nz_flags(res_u8);
-
-                if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
-                    self.set_overflow(self.a, !self.value_latch, res_u8);
-                    self.a = res_u8;
-                    self.set_carry(bin_res > 0xFF);
-                } else {
-                    self.set_overflow(self.a, !self.value_latch, res_u8);
-                    self.set_carry(bin_res > 0xFF);
-
-                    let mut low = (self.a & 0x0F) as i16
-                        - (self.value_latch & 0x0F) as i16
-                        - (1 - carry as i16);
-
-                    let mut high = (self.a >> 4) as i16
-                        - (self.value_latch >> 4) as i16
-                        - if low < 0 { 1 } else { 0 };
-
-                    if low < 0 {
-                        low -= 6;
-                    }
-                    if high < 0 {
-                        high -= 6;
-                    }
-
-                    self.a = (((high as u8) & 0x0F) << 4) | ((low as u8) & 0x0F);
-                }
-            }
+            Instruction::Sbc => self.run_sbc(self.value_latch),
             Instruction::Jam => {
                 self.prepare_for_next_instruction();
                 self.jammed = 1;
@@ -969,6 +936,22 @@ impl Mos6510 {
                     }
                 }
             }
+            Instruction::Isc => {
+                return match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        BusOperation::Write(self.addr_latch, self.value_latch)
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let res = self.value_latch.wrapping_add(1);
+                        let addr = self.addr_latch;
+                        self.prepare_for_next_instruction();
+                        self.run_sbc(res);
+                        BusOperation::Write(addr, res)
+                    }
+                    _ => unreachable!("Unexpected ISC execution cycle {}", self.cycle),
+                };
+            }
         }
 
         self.prepare_for_next_instruction();
@@ -1188,6 +1171,15 @@ impl Mos6510 {
             0x77 => (Instruction::Rra, AddressingMode::ZeroPageX),
             0x7B => (Instruction::Rra, AddressingMode::AbsoluteY),
             0x7F => (Instruction::Rra, AddressingMode::AbsoluteX),
+            // ISC
+            0xE3 => (Instruction::Isc, AddressingMode::IndirectX),
+            0xE7 => (Instruction::Isc, AddressingMode::ZeroPage),
+            0xEB => (Instruction::Sbc, AddressingMode::Immediate),
+            0xEF => (Instruction::Isc, AddressingMode::Absolute),
+            0xF3 => (Instruction::Isc, AddressingMode::IndirectY),
+            0xF7 => (Instruction::Isc, AddressingMode::ZeroPageX),
+            0xFB => (Instruction::Isc, AddressingMode::AbsoluteY),
+            0xFF => (Instruction::Isc, AddressingMode::AbsoluteX),
             _ => todo!("Unsupported opcode {:#02X}", opcode),
         };
     }
@@ -1269,6 +1261,40 @@ impl Mos6510 {
 
             self.a = (high as u8) | low;
             self.set_carry(decimal_carry);
+        }
+    }
+
+    fn run_sbc(&mut self, value: u8) {
+        let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
+            1
+        } else {
+            0
+        };
+        let bin_res = (self.a as u16) + (!value as u16) + carry;
+
+        let res_u8 = (bin_res & 0xFF) as u8;
+        self.set_nz_flags(res_u8);
+
+        if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
+            self.set_overflow(self.a, !value, res_u8);
+            self.a = res_u8;
+            self.set_carry(bin_res > 0xFF);
+        } else {
+            self.set_overflow(self.a, !value, res_u8);
+            self.set_carry(bin_res > 0xFF);
+
+            let mut low = (self.a & 0x0F) as i16 - (value & 0x0F) as i16 - (1 - carry as i16);
+
+            let mut high = (self.a >> 4) as i16 - (value >> 4) as i16 - if low < 0 { 1 } else { 0 };
+
+            if low < 0 {
+                low -= 6;
+            }
+            if high < 0 {
+                high -= 6;
+            }
+
+            self.a = (((high as u8) & 0x0F) << 4) | ((low as u8) & 0x0F);
         }
     }
 
@@ -1636,5 +1662,13 @@ mod tests {
         test_rra_zero_x   => "77.json",
         test_rra_abs_y    => "7b.json",
         test_rra_abs_x    => "7f.json",
+        test_isc_ind_x    => "e3.json",
+        test_isc_zero     => "e7.json",
+        test_sbc_imm_eb   => "eb.json",
+        test_isc_abs      => "ef.json",
+        test_isc_ind_y    => "f3.json",
+        test_isc_zero_x   => "f7.json",
+        test_isc_abs_y    => "fb.json",
+        test_isc_abs_x    => "ff.json",
     }
 }
