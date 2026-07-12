@@ -33,6 +33,7 @@ enum Instruction {
     Eor,
     Lda,
     Cmp,
+    Slo,
     Rla,
 }
 
@@ -44,6 +45,7 @@ impl Instruction {
             Instruction::Eor => false,
             Instruction::Lda => false,
             Instruction::Cmp => false,
+            Instruction::Slo => true,
             Instruction::Rla => true,
         }
     }
@@ -390,6 +392,10 @@ impl Mos6510 {
     }
 
     fn execute_instruction(&mut self) -> BusOperation {
+        if self.cycle < INSTRUCTION_EXECUTION_PHASE {
+            self.cycle = INSTRUCTION_EXECUTION_PHASE;
+        }
+
         match self.instruction {
             Instruction::Ora => {
                 self.a |= self.value_latch;
@@ -412,11 +418,28 @@ impl Mos6510 {
                 self.set_nz_flags(res);
                 self.set_carry(!overflow);
             }
+            Instruction::Slo => {
+                return match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        BusOperation::Write(self.addr_latch, self.value_latch)
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let overflow = self.value_latch & 0x80 != 0;
+                        let res = self.value_latch << 1;
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        self.a |= res;
+                        self.set_nz_flags(self.a);
+                        self.set_carry(overflow);
+                        BusOperation::Write(addr, res)
+                    }
+                    _ => unreachable!("Unexpected SLO execution cycle {}", self.cycle),
+                };
+            }
             Instruction::Rla => {
-                if self.cycle < INSTRUCTION_EXECUTION_PHASE {
-                    self.cycle = INSTRUCTION_EXECUTION_PHASE;
-                }
-
                 return match self.cycle {
                     INSTRUCTION_EXECUTION_PHASE => {
                         self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
@@ -499,10 +522,21 @@ impl Mos6510 {
             0xD9 => (Instruction::Cmp, AddressingMode::AbsoluteY),
             0xDD => (Instruction::Cmp, AddressingMode::AbsoluteX),
             // Unofficial instructions block
+            // SLO
+            0x03 => (Instruction::Slo, AddressingMode::IndirectX),
+            0x07 => (Instruction::Slo, AddressingMode::ZeroPage),
+            // TODO: ANC
+            // 0x0B => (Instruction::Slo, AddressingMode::Immediate),
+            0x0F => (Instruction::Slo, AddressingMode::Absolute),
+            0x13 => (Instruction::Slo, AddressingMode::IndirectY),
+            0x17 => (Instruction::Slo, AddressingMode::ZeroPageX),
+            0x1B => (Instruction::Slo, AddressingMode::AbsoluteY),
+            0x1F => (Instruction::Slo, AddressingMode::AbsoluteX),
             // RLA
             0x23 => (Instruction::Rla, AddressingMode::IndirectX),
             0x27 => (Instruction::Rla, AddressingMode::ZeroPage),
-            0x2B => (Instruction::Rla, AddressingMode::Immediate),
+            // TODO: ANC
+            // 0x2B => (Instruction::Rla, AddressingMode::Immediate),
             0x2F => (Instruction::Rla, AddressingMode::Absolute),
             0x33 => (Instruction::Rla, AddressingMode::IndirectY),
             0x37 => (Instruction::Rla, AddressingMode::ZeroPageX),
@@ -718,6 +752,15 @@ mod tests {
         test_cmp_zero_x   => "d5.json",
         test_cmp_abs_y    => "d9.json",
         test_cmp_abs_x    => "dd.json",
+        test_slo_ind_x    => "03.json",
+        test_slo_zero     => "07.json",
+        // TODO: ANC
+        // test_slo_imm      => "0b.json",
+        test_slo_abs      => "0f.json",
+        test_slo_ind_y    => "13.json",
+        test_slo_zero_x   => "17.json",
+        test_slo_abs_y    => "1b.json",
+        test_slo_abs_x    => "1f.json",
         test_rla_ind_x    => "23.json",
         test_rla_zero     => "27.json",
         // TODO: ANC
