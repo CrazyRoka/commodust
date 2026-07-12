@@ -36,19 +36,23 @@ enum Instruction {
     Anc,
     Slo,
     Rla,
+    Alr,
+    Sre,
 }
 
 impl Instruction {
     fn is_writing(&self) -> bool {
         match self {
-            Instruction::Ora => false,
-            Instruction::And => false,
-            Instruction::Eor => false,
-            Instruction::Lda => false,
-            Instruction::Cmp => false,
-            Instruction::Anc => false,
-            Instruction::Slo => true,
-            Instruction::Rla => true,
+            Self::Ora => false,
+            Self::And => false,
+            Self::Eor => false,
+            Self::Lda => false,
+            Self::Cmp => false,
+            Self::Anc => false,
+            Self::Slo => true,
+            Self::Rla => true,
+            Self::Alr => false,
+            Self::Sre => true,
         }
     }
 }
@@ -472,6 +476,33 @@ impl Mos6510 {
                     _ => unreachable!("Unexpected RLA execution cycle {}", self.cycle),
                 };
             }
+            Instruction::Alr => {
+                let carry = self.a & self.value_latch & 1 == 1;
+                self.a = (self.a & self.value_latch) >> 1;
+                self.set_nz_flags(self.a);
+                self.set_carry(carry);
+            }
+            Instruction::Sre => {
+                return match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        BusOperation::Write(self.addr_latch, self.value_latch)
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let overflow = self.value_latch & 0x01 != 0;
+                        let res = self.value_latch >> 1;
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        self.a ^= res;
+                        self.set_nz_flags(self.a);
+                        self.set_carry(overflow);
+                        BusOperation::Write(addr, res)
+                    }
+                    _ => unreachable!("Unexpected SRE execution cycle {}", self.cycle),
+                };
+            }
         }
 
         self.cycle = 0;
@@ -547,6 +578,15 @@ impl Mos6510 {
             0x37 => (Instruction::Rla, AddressingMode::ZeroPageX),
             0x3B => (Instruction::Rla, AddressingMode::AbsoluteY),
             0x3F => (Instruction::Rla, AddressingMode::AbsoluteX),
+            // SRE
+            0x43 => (Instruction::Sre, AddressingMode::IndirectX),
+            0x47 => (Instruction::Sre, AddressingMode::ZeroPage),
+            0x4B => (Instruction::Alr, AddressingMode::Immediate),
+            0x4F => (Instruction::Sre, AddressingMode::Absolute),
+            0x53 => (Instruction::Sre, AddressingMode::IndirectY),
+            0x57 => (Instruction::Sre, AddressingMode::ZeroPageX),
+            0x5B => (Instruction::Sre, AddressingMode::AbsoluteY),
+            0x5F => (Instruction::Sre, AddressingMode::AbsoluteX),
             _ => todo!("Unsupported opcode {:#02X}", opcode),
         };
     }
@@ -773,5 +813,13 @@ mod tests {
         test_rla_zero_x   => "37.json",
         test_rla_abs_y    => "3b.json",
         test_rla_abs_x    => "3f.json",
+        test_sre_ind_x    => "43.json",
+        test_sre_zero     => "47.json",
+        test_alr_imm_2b   => "4b.json",
+        test_sre_abs      => "4f.json",
+        test_sre_ind_y    => "53.json",
+        test_sre_zero_x   => "57.json",
+        test_sre_abs_y    => "5b.json",
+        test_sre_abs_x    => "5f.json",
     }
 }
