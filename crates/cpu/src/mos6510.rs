@@ -30,6 +30,11 @@ enum AddressModeProcessingResult {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Instruction {
+    Rts,
+    Pla,
+    Jmp,
+    Bvs,
+    Sei,
     Sty,
     Dey,
     Bcc,
@@ -92,6 +97,11 @@ enum Instruction {
 impl Instruction {
     fn is_writing(&self) -> bool {
         match self {
+            Self::Rts => false,
+            Self::Pla => false,
+            Self::Jmp => false,
+            Self::Bvs => false,
+            Self::Sei => false,
             Self::Sty => true,
             Self::Dey => false,
             Self::Bcc => false,
@@ -154,6 +164,11 @@ impl Instruction {
 
     fn is_reading_and_writing(&self) -> bool {
         match self {
+            Self::Rts => false,
+            Self::Pla => false,
+            Self::Jmp => false,
+            Self::Bvs => false,
+            Self::Sei => false,
             Self::Sty => false,
             Self::Dey => false,
             Self::Bcc => false,
@@ -288,7 +303,7 @@ impl Mos6510 {
             return operation;
         }
 
-        self.execute_instruction()
+        self.execute_instruction(data_in)
     }
 
     fn step_addressing(&mut self, data_in: u8) -> AddressModeProcessingResult {
@@ -475,7 +490,42 @@ impl Mos6510 {
                     ),
                 }
             }
-            AddressingMode::Indirect => todo!(),
+            AddressingMode::Indirect => match self.cycle {
+                1 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                2 => {
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    self.cycle = 3;
+                    self.addr_latch = data_in as u16;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(addr))
+                }
+                3 => {
+                    self.cycle = 4;
+                    self.addr_latch |= (data_in as u16) << 8;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                }
+                4 => {
+                    self.cycle = 5;
+                    self.value_latch = data_in;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(
+                        (self.addr_latch & 0xFF00)
+                            | ((self.addr_latch as u8).wrapping_add(1) as u16),
+                    ))
+                }
+                5 => {
+                    self.addr_latch = ((data_in as u16) << 8) | self.value_latch as u16;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => unreachable!(
+                    "Unexpected cycle for {:?} addressing mode {}",
+                    self.addressing_mode, self.cycle
+                ),
+            },
             AddressingMode::IndirectX => match self.cycle {
                 1 => {
                     let addr = self.pc;
@@ -569,12 +619,69 @@ impl Mos6510 {
         }
     }
 
-    fn execute_instruction(&mut self) -> BusOperation {
+    fn execute_instruction(&mut self, data_in: u8) -> BusOperation {
         if self.cycle < INSTRUCTION_EXECUTION_PHASE {
             self.cycle = INSTRUCTION_EXECUTION_PHASE;
         }
 
         match self.instruction {
+            Instruction::Rts => match self.cycle {
+                INSTRUCTION_EXECUTION_PHASE => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                    return BusOperation::Read(self.pc);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 2;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
+                    self.s = self.s.wrapping_add(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 3;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 3 => {
+                    self.addr_latch = data_in as u16;
+                    self.s = self.s.wrapping_add(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 4;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 4 => {
+                    self.addr_latch |= (data_in as u16) << 8;
+                    self.pc = self.addr_latch.wrapping_add(1);
+                    self.prepare_for_next_instruction();
+                    return BusOperation::Read(self.pc.wrapping_sub(1));
+                }
+                _ => unreachable!("Unexpected RTS execution cycle {}", self.cycle),
+            },
+            Instruction::Pla => match self.cycle {
+                INSTRUCTION_EXECUTION_PHASE => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                    return BusOperation::Read(self.pc);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 2;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
+                    self.s = self.s.wrapping_add(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 3;
+                    return BusOperation::Read(0x0100 | self.s as u16);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 3 => {
+                    self.a = data_in;
+                    self.set_nz_flags(self.a);
+                    self.prepare_for_next_instruction();
+                    return BusOperation::Read(self.pc);
+                }
+                _ => unreachable!("Unexpected PLA execution cycle {}", self.cycle),
+            },
+            Instruction::Jmp => {
+                self.pc = self.addr_latch;
+            }
+            Instruction::Bvs => return self.branch(self.p & STATUS_REGISTER_OVERFLOW != 0),
+            Instruction::Sei => {
+                self.p |= STATUS_REGISTER_INTERRUPT_DISABLE;
+            }
             Instruction::Sty => {
                 let addr = self.addr_latch;
                 self.prepare_for_next_instruction();
@@ -1105,6 +1212,15 @@ impl Mos6510 {
     fn decode_instruction(&mut self, opcode: u8) {
         (self.instruction, self.addressing_mode) = match opcode {
             // Control Instructions block
+            // RTS, PLA, JMP, BVS, SEI
+            0x60 => (Instruction::Rts, AddressingMode::Implied),
+            0x64 => (Instruction::Nop, AddressingMode::ZeroPage),
+            0x68 => (Instruction::Pla, AddressingMode::Implied),
+            0x6C => (Instruction::Jmp, AddressingMode::Indirect),
+            0x70 => (Instruction::Bvs, AddressingMode::Relative),
+            0x74 => (Instruction::Nop, AddressingMode::ZeroPageX),
+            0x78 => (Instruction::Sei, AddressingMode::Accumulator),
+            0x7C => (Instruction::Nop, AddressingMode::AbsoluteX),
             // STY
             0x80 => (Instruction::Nop, AddressingMode::Immediate),
             0x84 => (Instruction::Sty, AddressingMode::ZeroPage),
@@ -1658,6 +1774,14 @@ mod tests {
     }
 
     mos6502_tests! {
+        test_rts          => "60.json",
+        test_nop_64       => "64.json",
+        test_pla          => "68.json",
+        test_jmp_ind      => "6c.json",
+        test_bvs          => "70.json",
+        test_nop_74       => "74.json",
+        test_sei          => "78.json",
+        test_nop_7c       => "7c.json",
         test_nop_80       => "80.json",
         test_sty_zero     => "84.json",
         test_dey          => "88.json",
