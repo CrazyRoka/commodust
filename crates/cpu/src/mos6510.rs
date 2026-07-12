@@ -35,6 +35,8 @@ enum Instruction {
     Sta,
     Lda,
     Cmp,
+    Jam,
+    Asl,
     Anc,
     Slo,
     Rla,
@@ -52,6 +54,8 @@ impl Instruction {
             Self::Sta => true,
             Self::Lda => false,
             Self::Cmp => false,
+            Self::Jam => false,
+            Self::Asl => false,
             Self::Anc => false,
             Self::Slo => false,
             Self::Rla => false,
@@ -69,6 +73,8 @@ impl Instruction {
             Self::Sta => false,
             Self::Lda => false,
             Self::Cmp => false,
+            Self::Jam => false,
+            Self::Asl => true,
             Self::Anc => false,
             Self::Slo => true,
             Self::Rla => true,
@@ -102,6 +108,7 @@ pub struct Mos6510 {
     addressing_mode: AddressingMode,
     value_latch: u8,
     addr_latch: u16,
+    jammed: u8,
 }
 
 impl Mos6510 {
@@ -118,10 +125,23 @@ impl Mos6510 {
             addressing_mode: AddressingMode::Immediate,
             value_latch: 0,
             addr_latch: 0,
+            jammed: 0,
         }
     }
 
     pub fn step(&mut self, data_in: u8) -> BusOperation {
+        if self.jammed > 0 {
+            if self.jammed == 1 {
+                self.jammed += 1;
+                return BusOperation::Read(0xFFFF);
+            } else if self.jammed < 4 {
+                self.jammed += 1;
+                return BusOperation::Read(0xFFFE);
+            } else {
+                return BusOperation::Read(0xFFFF);
+            }
+        }
+
         if self.cycle == 0 {
             let addr = self.pc;
             self.pc = self.pc.wrapping_add(1);
@@ -147,7 +167,20 @@ impl Mos6510 {
 
         match self.addressing_mode {
             AddressingMode::Implied => AddressModeProcessingResult::Finished,
-            AddressingMode::Accumulator => todo!(),
+            AddressingMode::Accumulator => match self.cycle {
+                1 => {
+                    self.cycle = 2;
+                    AddressModeProcessingResult::Operation(BusOperation::Read(self.pc))
+                }
+                2 => {
+                    self.value_latch = self.a;
+                    AddressModeProcessingResult::Finished
+                }
+                _ => unreachable!(
+                    "Unexpected cycle for Accumulator addressing mode {}",
+                    self.cycle
+                ),
+            },
             AddressingMode::Immediate => match self.cycle {
                 1 => {
                     let addr = self.pc;
@@ -456,12 +489,10 @@ impl Mos6510 {
                 self.set_nz_flags(self.a);
             }
             Instruction::Nop => {
-                let addr = self.pc;
-                self.pc = self.pc.wrapping_add(1);
                 self.cycle = 0;
                 self.value_latch = 0;
                 self.addr_latch = 0;
-                return BusOperation::Read(addr);
+                return BusOperation::Read(self.pc);
             }
             Instruction::Sta => {
                 let addr = self.addr_latch;
@@ -478,6 +509,41 @@ impl Mos6510 {
                 let (res, overflow) = self.a.overflowing_sub(self.value_latch);
                 self.set_nz_flags(res);
                 self.set_carry(!overflow);
+            }
+            Instruction::Jam => {
+                self.cycle = 0;
+                self.value_latch = 0;
+                self.addr_latch = 0;
+                self.jammed = 1;
+                return BusOperation::Read(self.pc);
+            }
+            Instruction::Asl => {
+                match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE
+                        if self.addressing_mode == AddressingMode::Accumulator =>
+                    {
+                        let carry = self.value_latch & 0x80 != 0;
+                        self.a = self.value_latch << 1;
+                        self.set_nz_flags(self.a);
+                        self.set_carry(carry);
+                    }
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        return BusOperation::Write(self.addr_latch, self.value_latch);
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let carry = self.value_latch & 0x80 != 0;
+                        let res = self.value_latch << 1;
+                        self.set_nz_flags(res);
+                        self.set_carry(carry);
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        return BusOperation::Write(addr, res);
+                    }
+                    _ => unreachable!("Unexpected ASL execution cycle {}", self.cycle),
+                };
             }
             Instruction::Anc => {
                 self.a &= self.value_latch;
@@ -599,7 +665,7 @@ impl Mos6510 {
             // STA
             0x81 => (Instruction::Sta, AddressingMode::IndirectX),
             0x85 => (Instruction::Sta, AddressingMode::ZeroPage),
-            0x89 => (Instruction::Nop, AddressingMode::Implied),
+            0x89 => (Instruction::Nop, AddressingMode::Immediate),
             0x8D => (Instruction::Sta, AddressingMode::Absolute),
             0x91 => (Instruction::Sta, AddressingMode::IndirectY),
             0x95 => (Instruction::Sta, AddressingMode::ZeroPageX),
@@ -623,6 +689,16 @@ impl Mos6510 {
             0xD5 => (Instruction::Cmp, AddressingMode::ZeroPageX),
             0xD9 => (Instruction::Cmp, AddressingMode::AbsoluteY),
             0xDD => (Instruction::Cmp, AddressingMode::AbsoluteX),
+            // RMW and Data Movement block
+            // ASL
+            0x02 => (Instruction::Jam, AddressingMode::Implied),
+            0x06 => (Instruction::Asl, AddressingMode::ZeroPage),
+            0x0A => (Instruction::Asl, AddressingMode::Accumulator),
+            0x0E => (Instruction::Asl, AddressingMode::Absolute),
+            0x12 => (Instruction::Jam, AddressingMode::Implied),
+            0x16 => (Instruction::Asl, AddressingMode::ZeroPageX),
+            0x1A => (Instruction::Nop, AddressingMode::Implied),
+            0x1E => (Instruction::Asl, AddressingMode::AbsoluteX),
             // Unofficial instructions block
             // SLO
             0x03 => (Instruction::Slo, AddressingMode::IndirectX),
@@ -801,10 +877,13 @@ mod tests {
             }
 
             let mut expected_cpu = case.final_state.create_cpu();
-            // Requesting opcode to match with actual cpu state
-            expected_cpu.step(0xFF);
             expected_cpu.instruction = cpu.instruction;
             expected_cpu.addressing_mode = cpu.addressing_mode;
+            expected_cpu.jammed = cpu.jammed;
+            if cpu.cycle == 1 {
+                // Requesting opcode to match with actual cpu state
+                expected_cpu.step(0xFF);
+            }
 
             let expected_memory = case.final_state.create_memory();
             assert_eq!(
@@ -869,6 +948,14 @@ mod tests {
         test_cmp_zero_x   => "d5.json",
         test_cmp_abs_y    => "d9.json",
         test_cmp_abs_x    => "dd.json",
+        test_jam_02       => "02.json",
+        test_asl_zero     => "06.json",
+        test_asl_acc      => "0a.json",
+        test_asl_abs      => "0e.json",
+        test_jam_12       => "12.json",
+        test_asl_zero_x   => "16.json",
+        test_nop_1a       => "1a.json",
+        test_asl_abs_x    => "1e.json",
         test_slo_ind_x    => "03.json",
         test_slo_zero     => "07.json",
         test_anc_imm_0b   => "0b.json",
