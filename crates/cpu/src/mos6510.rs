@@ -73,6 +73,8 @@ enum Instruction {
     Sre,
     Arr,
     Rra,
+    Lax,
+    Las,
     Dcp,
     Sbx,
     Isc,
@@ -124,6 +126,8 @@ impl Instruction {
             Self::Sre => false,
             Self::Arr => false,
             Self::Rra => false,
+            Self::Lax => false,
+            Self::Las => false,
             Self::Dcp => false,
             Self::Sbx => false,
             Self::Isc => false,
@@ -175,8 +179,10 @@ impl Instruction {
             Self::Sre => true,
             Self::Arr => true,
             Self::Rra => true,
+            Self::Lax => false,
+            Self::Las => false,
             Self::Dcp => true,
-            Self::Sbx => true,
+            Self::Sbx => false,
             Self::Isc => true,
         }
     }
@@ -942,6 +948,23 @@ impl Mos6510 {
                     }
                 }
             }
+            Instruction::Lax => {
+                let value = if self.addressing_mode == AddressingMode::Immediate {
+                    (self.a | 0xEE) & self.value_latch
+                } else {
+                    self.value_latch
+                };
+                self.a = value;
+                self.x = value;
+                self.set_nz_flags(value);
+            }
+            Instruction::Las => {
+                let res = self.s & self.value_latch;
+                self.a = res;
+                self.x = res;
+                self.s = res;
+                self.set_nz_flags(res);
+            }
             Instruction::Dcp => match self.cycle {
                 INSTRUCTION_EXECUTION_PHASE => {
                     self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
@@ -1202,6 +1225,15 @@ impl Mos6510 {
             0x77 => (Instruction::Rra, AddressingMode::ZeroPageX),
             0x7B => (Instruction::Rra, AddressingMode::AbsoluteY),
             0x7F => (Instruction::Rra, AddressingMode::AbsoluteX),
+            // LAX
+            0xA3 => (Instruction::Lax, AddressingMode::IndirectX),
+            0xA7 => (Instruction::Lax, AddressingMode::ZeroPage),
+            0xAB => (Instruction::Lax, AddressingMode::Immediate),
+            0xAF => (Instruction::Lax, AddressingMode::Absolute),
+            0xB3 => (Instruction::Lax, AddressingMode::IndirectY),
+            0xB7 => (Instruction::Lax, AddressingMode::ZeroPageY),
+            0xBB => (Instruction::Las, AddressingMode::AbsoluteY),
+            0xBF => (Instruction::Lax, AddressingMode::AbsoluteY),
             // DCP
             0xC3 => (Instruction::Dcp, AddressingMode::IndirectX),
             0xC7 => (Instruction::Dcp, AddressingMode::ZeroPage),
@@ -1702,6 +1734,14 @@ mod tests {
         test_rra_zero_x   => "77.json",
         test_rra_abs_y    => "7b.json",
         test_rra_abs_x    => "7f.json",
+        test_lax_ind_x    => "a3.json",
+        test_lax_zero     => "a7.json",
+        test_lax_imm      => "ab.json",
+        test_lax_abs      => "af.json",
+        test_lax_ind_y    => "b3.json",
+        test_lax_zero_y   => "b7.json",
+        test_las          => "bb.json",
+        test_lax_abs_y    => "bf.json",
         test_dcp_ind_x    => "c3.json",
         test_dcp_zero     => "c7.json",
         test_sbx_imm_cb   => "cb.json",
