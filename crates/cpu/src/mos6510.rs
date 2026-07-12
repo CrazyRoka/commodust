@@ -40,6 +40,7 @@ enum Instruction {
     Rol,
     Lsr,
     Ror,
+    Inc,
     Anc,
     Slo,
     Rla,
@@ -62,6 +63,7 @@ impl Instruction {
             Self::Rol => false,
             Self::Lsr => false,
             Self::Ror => false,
+            Self::Inc => false,
             Self::Anc => false,
             Self::Slo => false,
             Self::Rla => false,
@@ -84,6 +86,7 @@ impl Instruction {
             Self::Rol => true,
             Self::Lsr => true,
             Self::Ror => true,
+            Self::Inc => true,
             Self::Anc => false,
             Self::Slo => true,
             Self::Rla => true,
@@ -617,7 +620,7 @@ impl Mos6510 {
                         self.addr_latch = 0;
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected ROL execution cycle {}", self.cycle),
+                    _ => unreachable!("Unexpected LSR execution cycle {}", self.cycle),
                 };
             }
             Instruction::Ror => {
@@ -655,9 +658,28 @@ impl Mos6510 {
                         self.addr_latch = 0;
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected ROL execution cycle {}", self.cycle),
+                    _ => unreachable!("Unexpected ROR execution cycle {}", self.cycle),
                 };
             }
+            Instruction::Inc => {
+                match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        return BusOperation::Write(self.addr_latch, self.value_latch);
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let res = self.value_latch.wrapping_add(1);
+                        self.set_nz_flags(res);
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        return BusOperation::Write(addr, res);
+                    }
+                    _ => unreachable!("Unexpected INC execution cycle {}", self.cycle),
+                };
+            }
+
             Instruction::Anc => {
                 self.a &= self.value_latch;
                 self.set_nz_flags(self.a);
@@ -839,6 +861,15 @@ impl Mos6510 {
             0x76 => (Instruction::Ror, AddressingMode::ZeroPageX),
             0x7A => (Instruction::Nop, AddressingMode::Implied),
             0x7E => (Instruction::Ror, AddressingMode::AbsoluteX),
+            // INC
+            0xE2 => (Instruction::Nop, AddressingMode::Immediate),
+            0xE6 => (Instruction::Inc, AddressingMode::ZeroPage),
+            0xEA => (Instruction::Nop, AddressingMode::Implied),
+            0xEE => (Instruction::Inc, AddressingMode::Absolute),
+            0xF2 => (Instruction::Jam, AddressingMode::Implied),
+            0xF6 => (Instruction::Inc, AddressingMode::ZeroPageX),
+            0xFA => (Instruction::Nop, AddressingMode::Implied),
+            0xFE => (Instruction::Inc, AddressingMode::AbsoluteX),
             // Unofficial instructions block
             // SLO
             0x03 => (Instruction::Slo, AddressingMode::IndirectX),
@@ -1120,7 +1151,14 @@ mod tests {
         test_ror_zero_x   => "76.json",
         test_nop_7a       => "7a.json",
         test_ror_abs_x    => "7e.json",
-
+        test_nop_e2       => "e2.json",
+        test_inc_zero     => "e6.json",
+        test_nop_ea       => "ea.json",
+        test_inc_abs      => "ee.json",
+        test_jam_f2       => "f2.json",
+        test_inc_zero_x   => "f6.json",
+        test_nop_fa       => "fa.json",
+        test_inc_abs_x    => "fe.json",
         test_slo_ind_x    => "03.json",
         test_slo_zero     => "07.json",
         test_anc_imm_0b   => "0b.json",
