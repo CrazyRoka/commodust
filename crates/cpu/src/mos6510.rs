@@ -30,6 +30,10 @@ enum AddressModeProcessingResult {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Instruction {
+    Ldy,
+    Tay,
+    Bcs,
+    Clv,
     Ora,
     And,
     Eor,
@@ -66,6 +70,10 @@ enum Instruction {
 impl Instruction {
     fn is_writing(&self) -> bool {
         match self {
+            Self::Ldy => false,
+            Self::Tay => false,
+            Self::Bcs => false,
+            Self::Clv => false,
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
@@ -102,6 +110,10 @@ impl Instruction {
 
     fn is_reading_and_writing(&self) -> bool {
         match self {
+            Self::Ldy => false,
+            Self::Tay => false,
+            Self::Bcs => false,
+            Self::Clv => false,
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
@@ -230,11 +242,11 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => unreachable!(
-                    "Unexpected cycle for Accumulator addressing mode {}",
-                    self.cycle
+                    "Unexpected cycle for {:?} addressing mode {}",
+                    self.addressing_mode, self.cycle
                 ),
             },
-            AddressingMode::Immediate => match self.cycle {
+            AddressingMode::Immediate | AddressingMode::Relative => match self.cycle {
                 1 => {
                     let addr = self.pc;
                     self.pc = self.pc.wrapping_add(1);
@@ -246,8 +258,8 @@ impl Mos6510 {
                     AddressModeProcessingResult::Finished
                 }
                 _ => unreachable!(
-                    "Unexpected cycle for Immediate addressing mode {}",
-                    self.cycle
+                    "Unexpected cycle for {:?} addressing mode {}",
+                    self.addressing_mode, self.cycle
                 ),
             },
             AddressingMode::ZeroPage => match self.cycle {
@@ -488,7 +500,6 @@ impl Mos6510 {
                     self.addressing_mode, self.cycle
                 ),
             },
-            AddressingMode::Relative => todo!(),
         }
     }
 
@@ -498,6 +509,41 @@ impl Mos6510 {
         }
 
         match self.instruction {
+            Instruction::Ldy => {
+                self.y = self.value_latch;
+                self.set_nz_flags(self.y);
+            }
+            Instruction::Tay => {
+                self.y = self.a;
+                self.set_nz_flags(self.y);
+            }
+            Instruction::Bcs => match self.cycle {
+                INSTRUCTION_EXECUTION_PHASE => {
+                    if self.p & STATUS_REGISTER_CARRY != 0 {
+                        self.addr_latch = if self.value_latch >= 128 {
+                            self.pc
+                                .wrapping_sub(1)
+                                .wrapping_sub(0xFF - self.value_latch as u16)
+                        } else {
+                            self.pc.wrapping_add(self.value_latch as u16)
+                        };
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        return BusOperation::Read(self.pc);
+                    }
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                    if self.pc & 0xFF00 != self.addr_latch & 0xFF00 {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 2;
+                        return BusOperation::Read((self.pc & 0xFF00) | (self.addr_latch & 0x00FF));
+                    }
+                    self.pc = self.addr_latch;
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
+                    self.pc = self.addr_latch;
+                }
+                _ => unreachable!("Unexpected BCS execution cycle {}", self.cycle),
+            },
+            Instruction::Clv => self.p &= !STATUS_REGISTER_OVERFLOW,
             Instruction::Ora => {
                 self.a |= self.value_latch;
                 self.set_nz_flags(self.a);
@@ -943,6 +989,16 @@ impl Mos6510 {
 
     fn decode_instruction(&mut self, opcode: u8) {
         (self.instruction, self.addressing_mode) = match opcode {
+            // Control Instructions block
+            // LDY
+            0xA0 => (Instruction::Ldy, AddressingMode::Immediate),
+            0xA4 => (Instruction::Ldy, AddressingMode::ZeroPage),
+            0xA8 => (Instruction::Tay, AddressingMode::Accumulator),
+            0xAC => (Instruction::Ldy, AddressingMode::Absolute),
+            0xB0 => (Instruction::Bcs, AddressingMode::Relative),
+            0xB4 => (Instruction::Ldy, AddressingMode::ZeroPageX),
+            0xB8 => (Instruction::Clv, AddressingMode::Accumulator),
+            0xBC => (Instruction::Ldy, AddressingMode::AbsoluteX),
             // ALU block
             // ORA
             0x01 => (Instruction::Ora, AddressingMode::IndirectX),
@@ -1352,6 +1408,14 @@ mod tests {
     }
 
     mos6502_tests! {
+        test_ldy_ind_x    => "a0.json",
+        test_ldy_zero     => "a4.json",
+        test_tay          => "a8.json",
+        test_ldy_abs      => "ac.json",
+        test_bcs          => "b0.json",
+        test_ldy_zero_x   => "b4.json",
+        test_clv          => "b8.json",
+        test_ldy_abs_x    => "bc.json",
         test_ora_ind_x    => "01.json",
         test_ora_zero     => "05.json",
         test_ora_imm      => "09.json",
