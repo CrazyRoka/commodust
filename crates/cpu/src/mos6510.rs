@@ -39,6 +39,7 @@ enum Instruction {
     Asl,
     Rol,
     Lsr,
+    Ror,
     Anc,
     Slo,
     Rla,
@@ -60,6 +61,7 @@ impl Instruction {
             Self::Asl => false,
             Self::Rol => false,
             Self::Lsr => false,
+            Self::Ror => false,
             Self::Anc => false,
             Self::Slo => false,
             Self::Rla => false,
@@ -81,6 +83,7 @@ impl Instruction {
             Self::Asl => true,
             Self::Rol => true,
             Self::Lsr => true,
+            Self::Ror => true,
             Self::Anc => false,
             Self::Slo => true,
             Self::Rla => true,
@@ -617,6 +620,44 @@ impl Mos6510 {
                     _ => unreachable!("Unexpected ROL execution cycle {}", self.cycle),
                 };
             }
+            Instruction::Ror => {
+                match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE
+                        if self.addressing_mode == AddressingMode::Accumulator =>
+                    {
+                        let carry = self.value_latch & 0x01 != 0;
+                        self.a = (self.value_latch >> 1)
+                            | if self.p & STATUS_REGISTER_CARRY != 0 {
+                                0x80
+                            } else {
+                                0
+                            };
+                        self.set_nz_flags(self.a);
+                        self.set_carry(carry);
+                    }
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        return BusOperation::Write(self.addr_latch, self.value_latch);
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let carry = self.value_latch & 0x01 != 0;
+                        let res = self.value_latch >> 1
+                            | if self.p & STATUS_REGISTER_CARRY != 0 {
+                                0x80
+                            } else {
+                                0
+                            };
+                        self.set_nz_flags(res);
+                        self.set_carry(carry);
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        return BusOperation::Write(addr, res);
+                    }
+                    _ => unreachable!("Unexpected ROL execution cycle {}", self.cycle),
+                };
+            }
             Instruction::Anc => {
                 self.a &= self.value_latch;
                 self.set_nz_flags(self.a);
@@ -789,6 +830,15 @@ impl Mos6510 {
             0x56 => (Instruction::Lsr, AddressingMode::ZeroPageX),
             0x5A => (Instruction::Nop, AddressingMode::Implied),
             0x5E => (Instruction::Lsr, AddressingMode::AbsoluteX),
+            // ROR
+            0x62 => (Instruction::Jam, AddressingMode::Implied),
+            0x66 => (Instruction::Ror, AddressingMode::ZeroPage),
+            0x6A => (Instruction::Ror, AddressingMode::Accumulator),
+            0x6E => (Instruction::Ror, AddressingMode::Absolute),
+            0x72 => (Instruction::Jam, AddressingMode::Implied),
+            0x76 => (Instruction::Ror, AddressingMode::ZeroPageX),
+            0x7A => (Instruction::Nop, AddressingMode::Implied),
+            0x7E => (Instruction::Ror, AddressingMode::AbsoluteX),
             // Unofficial instructions block
             // SLO
             0x03 => (Instruction::Slo, AddressingMode::IndirectX),
@@ -1062,6 +1112,15 @@ mod tests {
         test_lsr_zero_x   => "56.json",
         test_nop_5a       => "5a.json",
         test_lsr_abs_x    => "5e.json",
+        test_jam_62       => "62.json",
+        test_ror_zero     => "66.json",
+        test_ror_acc      => "6a.json",
+        test_ror_abs      => "6e.json",
+        test_jam_72       => "72.json",
+        test_ror_zero_x   => "76.json",
+        test_nop_7a       => "7a.json",
+        test_ror_abs_x    => "7e.json",
+
         test_slo_ind_x    => "03.json",
         test_slo_zero     => "07.json",
         test_anc_imm_0b   => "0b.json",
