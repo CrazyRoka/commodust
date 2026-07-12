@@ -31,6 +31,8 @@ enum Instruction {
     Ora,
     And,
     Eor,
+    Nop,
+    Sta,
     Lda,
     Cmp,
     Anc,
@@ -46,6 +48,25 @@ impl Instruction {
             Self::Ora => false,
             Self::And => false,
             Self::Eor => false,
+            Self::Nop => false,
+            Self::Sta => true,
+            Self::Lda => false,
+            Self::Cmp => false,
+            Self::Anc => false,
+            Self::Slo => false,
+            Self::Rla => false,
+            Self::Alr => false,
+            Self::Sre => false,
+        }
+    }
+
+    fn is_reading_and_writing(&self) -> bool {
+        match self {
+            Self::Ora => false,
+            Self::And => false,
+            Self::Eor => false,
+            Self::Nop => false,
+            Self::Sta => false,
             Self::Lda => false,
             Self::Cmp => false,
             Self::Anc => false,
@@ -125,7 +146,7 @@ impl Mos6510 {
         }
 
         match self.addressing_mode {
-            AddressingMode::Implied => todo!(),
+            AddressingMode::Implied => AddressModeProcessingResult::Finished,
             AddressingMode::Accumulator => todo!(),
             AddressingMode::Immediate => match self.cycle {
                 1 => {
@@ -153,7 +174,11 @@ impl Mos6510 {
                 2 => {
                     self.cycle = 3;
                     self.addr_latch = data_in as u16;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    if self.instruction.is_writing() {
+                        AddressModeProcessingResult::Finished
+                    } else {
+                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    }
                 }
                 3 => {
                     self.value_latch = data_in;
@@ -179,7 +204,11 @@ impl Mos6510 {
                 3 => {
                     self.cycle = 4;
                     self.addr_latch = (self.addr_latch as u8).wrapping_add(self.x) as u16;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    if self.instruction.is_writing() {
+                        AddressModeProcessingResult::Finished
+                    } else {
+                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    }
                 }
                 4 => {
                     self.value_latch = data_in;
@@ -208,7 +237,11 @@ impl Mos6510 {
                 3 => {
                     self.cycle = 4;
                     self.addr_latch |= (data_in as u16) << 8;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    if self.instruction.is_writing() {
+                        AddressModeProcessingResult::Finished
+                    } else {
+                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    }
                 }
                 4 => {
                     self.value_latch = data_in;
@@ -242,15 +275,16 @@ impl Mos6510 {
                     ))
                 }
                 4 => {
-                    if !self.instruction.is_writing()
-                        && self.addr_latch.wrapping_add(self.x as u16) & 0xFF00
-                            == self.addr_latch & 0xFF00
+                    let page_cross = self.addr_latch.wrapping_add(self.x as u16) & 0xFF00
+                        == self.addr_latch & 0xFF00;
+                    self.addr_latch = self.addr_latch.wrapping_add(self.x as u16);
+                    if !self.instruction.is_reading_and_writing() && page_cross
+                        || self.instruction.is_writing()
                     {
                         self.value_latch = data_in;
                         AddressModeProcessingResult::Finished
                     } else {
                         self.cycle = 5;
-                        self.addr_latch = self.addr_latch.wrapping_add(self.x as u16);
                         AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
                     }
                 }
@@ -286,15 +320,16 @@ impl Mos6510 {
                     ))
                 }
                 4 => {
-                    if !self.instruction.is_writing()
-                        && self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
-                            == self.addr_latch & 0xFF00
+                    let page_cross = self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
+                        == self.addr_latch & 0xFF00;
+                    self.addr_latch = self.addr_latch.wrapping_add(self.y as u16);
+                    if !self.instruction.is_reading_and_writing() && page_cross
+                        || self.instruction.is_writing()
                     {
                         self.value_latch = data_in;
                         AddressModeProcessingResult::Finished
                     } else {
                         self.cycle = 5;
-                        self.addr_latch = self.addr_latch.wrapping_add(self.y as u16);
                         AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
                     }
                 }
@@ -334,7 +369,11 @@ impl Mos6510 {
                 5 => {
                     self.cycle = 6;
                     self.addr_latch |= (data_in as u16) << 8;
-                    AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    if self.instruction.is_writing() {
+                        AddressModeProcessingResult::Finished
+                    } else {
+                        AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
+                    }
                 }
                 6 => {
                     self.value_latch = data_in;
@@ -372,15 +411,16 @@ impl Mos6510 {
                     ))
                 }
                 5 => {
-                    if !self.instruction.is_writing()
-                        && self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
-                            == self.addr_latch & 0xFF00
+                    let page_cross = self.addr_latch.wrapping_add(self.y as u16) & 0xFF00
+                        == self.addr_latch & 0xFF00;
+                    self.addr_latch = self.addr_latch.wrapping_add(self.y as u16);
+                    if !self.instruction.is_reading_and_writing() && page_cross
+                        || self.instruction.is_writing()
                     {
                         self.value_latch = data_in;
                         AddressModeProcessingResult::Finished
                     } else {
                         self.cycle = 6;
-                        self.addr_latch = self.addr_latch.wrapping_add(self.y as u16);
                         AddressModeProcessingResult::Operation(BusOperation::Read(self.addr_latch))
                     }
                 }
@@ -414,6 +454,21 @@ impl Mos6510 {
             Instruction::Eor => {
                 self.a ^= self.value_latch;
                 self.set_nz_flags(self.a);
+            }
+            Instruction::Nop => {
+                let addr = self.pc;
+                self.pc = self.pc.wrapping_add(1);
+                self.cycle = 0;
+                self.value_latch = 0;
+                self.addr_latch = 0;
+                return BusOperation::Read(addr);
+            }
+            Instruction::Sta => {
+                let addr = self.addr_latch;
+                self.cycle = 0;
+                self.value_latch = 0;
+                self.addr_latch = 0;
+                return BusOperation::Write(addr, self.a);
             }
             Instruction::Lda => {
                 self.a = self.value_latch;
@@ -541,6 +596,15 @@ impl Mos6510 {
             0x55 => (Instruction::Eor, AddressingMode::ZeroPageX),
             0x59 => (Instruction::Eor, AddressingMode::AbsoluteY),
             0x5D => (Instruction::Eor, AddressingMode::AbsoluteX),
+            // STA
+            0x81 => (Instruction::Sta, AddressingMode::IndirectX),
+            0x85 => (Instruction::Sta, AddressingMode::ZeroPage),
+            0x89 => (Instruction::Nop, AddressingMode::Implied),
+            0x8D => (Instruction::Sta, AddressingMode::Absolute),
+            0x91 => (Instruction::Sta, AddressingMode::IndirectY),
+            0x95 => (Instruction::Sta, AddressingMode::ZeroPageX),
+            0x99 => (Instruction::Sta, AddressingMode::AbsoluteY),
+            0x9D => (Instruction::Sta, AddressingMode::AbsoluteX),
             // LDA
             0xA1 => (Instruction::Lda, AddressingMode::IndirectX),
             0xA5 => (Instruction::Lda, AddressingMode::ZeroPage),
@@ -730,8 +794,8 @@ mod tests {
                         request = cpu.step(0xFF);
                     }
                     _ => panic!(
-                        "Test failed. Unexpected cpu operation {:?}, wanted {:?}",
-                        request, cycle_type
+                        "Test case '{}': Unexpected cpu operation {:?}, wanted {:?}",
+                        case.name, request, cycle_type
                     ),
                 }
             }
@@ -781,6 +845,14 @@ mod tests {
         test_eor_zero_x   => "55.json",
         test_eor_abs_y    => "59.json",
         test_eor_abs_x    => "5d.json",
+        test_sta_ind_x    => "81.json",
+        test_sta_zero     => "85.json",
+        test_nop_89       => "89.json",
+        test_sta_abs      => "8d.json",
+        test_sta_ind_y    => "91.json",
+        test_sta_zero_x   => "95.json",
+        test_sta_abs_y    => "99.json",
+        test_sta_abs_x    => "9d.json",
         test_lda_ind_x    => "a1.json",
         test_lda_zero     => "a5.json",
         test_lda_imm      => "a9.json",
