@@ -38,6 +38,7 @@ enum Instruction {
     Sta,
     Lda,
     Cmp,
+    Sbc,
     Jam,
     Asl,
     Rol,
@@ -71,6 +72,7 @@ impl Instruction {
             Self::Sta => true,
             Self::Lda => false,
             Self::Cmp => false,
+            Self::Sbc => false,
             Self::Jam => false,
             Self::Asl => false,
             Self::Rol => false,
@@ -104,6 +106,7 @@ impl Instruction {
             Self::Sta => false,
             Self::Lda => false,
             Self::Cmp => false,
+            Self::Sbc => false,
             Self::Jam => false,
             Self::Asl => true,
             Self::Rol => true,
@@ -502,32 +505,24 @@ impl Mos6510 {
                 self.set_nz_flags(self.a);
             }
             Instruction::Adc => {
-                if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
-                    let res = (self.a as u16)
-                        + (self.value_latch as u16)
-                        + if self.p & STATUS_REGISTER_CARRY != 0 {
-                            1
-                        } else {
-                            0
-                        };
-                    self.set_overflow(self.a, self.value_latch, (res & 0xFF) as u8);
-                    self.a = (res & 0xFF) as u8;
-                    self.set_nz_flags(self.a);
-                    self.set_carry(res > 0xFF);
+                let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
+                    1
                 } else {
-                    let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
-                        1
-                    } else {
-                        0
-                    };
+                    0
+                };
+                let binary_res = (self.a as u16) + (self.value_latch as u16) + carry as u16;
+                self.set_nz_flags((binary_res & 0xFF) as u8);
 
+                if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
+                    self.set_overflow(self.a, self.value_latch, (binary_res & 0xFF) as u8);
+                    self.a = (binary_res & 0xFF) as u8;
+                    self.set_carry(binary_res > 0xFF);
+                } else {
                     let mut low = (self.a & 0x0F) + (self.value_latch & 0x0F) + carry;
                     let mut high = (self.a & 0xF0) as u16
                         + (self.value_latch & 0xF0) as u16
                         + (if low > 9 { 0x10 } else { 0 });
 
-                    let binary_res = (self.a as u16) + (self.value_latch as u16) + carry as u16;
-                    self.set_nz_flags((binary_res & 0xFF) as u8);
                     self.set_overflow(self.a, self.value_latch, high as u8);
 
                     if high & 0x80 != 0 {
@@ -574,6 +569,43 @@ impl Mos6510 {
                 let (res, carry) = self.a.overflowing_sub(self.value_latch);
                 self.set_nz_flags(res);
                 self.set_carry(!carry);
+            }
+            Instruction::Sbc => {
+                let carry = if self.p & STATUS_REGISTER_CARRY != 0 {
+                    1
+                } else {
+                    0
+                };
+                let bin_res = (self.a as u16) + (!self.value_latch as u16) + carry;
+
+                let res_u8 = (bin_res & 0xFF) as u8;
+                self.set_nz_flags(res_u8);
+
+                if self.p & STATUS_REGISTER_DECIMAL_MODE == 0 {
+                    self.set_overflow(self.a, !self.value_latch, res_u8);
+                    self.a = res_u8;
+                    self.set_carry(bin_res > 0xFF);
+                } else {
+                    self.set_overflow(self.a, !self.value_latch, res_u8);
+                    self.set_carry(bin_res > 0xFF);
+
+                    let mut low = (self.a & 0x0F) as i16
+                        - (self.value_latch & 0x0F) as i16
+                        - (1 - carry as i16);
+
+                    let mut high = (self.a >> 4) as i16
+                        - (self.value_latch >> 4) as i16
+                        - if low < 0 { 1 } else { 0 };
+
+                    if low < 0 {
+                        low -= 6;
+                    }
+                    if high < 0 {
+                        high -= 6;
+                    }
+
+                    self.a = (((high as u8) & 0x0F) << 4) | ((low as u8) & 0x0F);
+                }
             }
             Instruction::Jam => {
                 self.cycle = 0;
@@ -947,6 +979,15 @@ impl Mos6510 {
             0xD5 => (Instruction::Cmp, AddressingMode::ZeroPageX),
             0xD9 => (Instruction::Cmp, AddressingMode::AbsoluteY),
             0xDD => (Instruction::Cmp, AddressingMode::AbsoluteX),
+            // SBC
+            0xE1 => (Instruction::Sbc, AddressingMode::IndirectX),
+            0xE5 => (Instruction::Sbc, AddressingMode::ZeroPage),
+            0xE9 => (Instruction::Sbc, AddressingMode::Immediate),
+            0xED => (Instruction::Sbc, AddressingMode::Absolute),
+            0xF1 => (Instruction::Sbc, AddressingMode::IndirectY),
+            0xF5 => (Instruction::Sbc, AddressingMode::ZeroPageX),
+            0xF9 => (Instruction::Sbc, AddressingMode::AbsoluteY),
+            0xFD => (Instruction::Sbc, AddressingMode::AbsoluteX),
             // RMW and Data Movement block
             // ASL
             0x02 => (Instruction::Jam, AddressingMode::Implied),
@@ -1286,6 +1327,14 @@ mod tests {
         test_cmp_zero_x   => "d5.json",
         test_cmp_abs_y    => "d9.json",
         test_cmp_abs_x    => "dd.json",
+        test_sbc_ind_x    => "e1.json",
+        test_sbc_zero     => "e5.json",
+        test_sbc_imm      => "e9.json",
+        test_sbc_abs      => "ed.json",
+        test_sbc_ind_y    => "f1.json",
+        test_sbc_zero_x   => "f5.json",
+        test_sbc_abs_y    => "f9.json",
+        test_sbc_abs_x    => "fd.json",
         test_jam_02       => "02.json",
         test_asl_zero     => "06.json",
         test_asl_acc      => "0a.json",
