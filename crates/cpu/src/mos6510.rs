@@ -40,6 +40,8 @@ enum Instruction {
     Rol,
     Lsr,
     Ror,
+    Dex,
+    Dec,
     Inc,
     Anc,
     Slo,
@@ -63,6 +65,8 @@ impl Instruction {
             Self::Rol => false,
             Self::Lsr => false,
             Self::Ror => false,
+            Self::Dex => false,
+            Self::Dec => false,
             Self::Inc => false,
             Self::Anc => false,
             Self::Slo => false,
@@ -86,6 +90,8 @@ impl Instruction {
             Self::Rol => true,
             Self::Lsr => true,
             Self::Ror => true,
+            Self::Dex => true,
+            Self::Dec => true,
             Self::Inc => true,
             Self::Anc => false,
             Self::Slo => true,
@@ -661,6 +667,28 @@ impl Mos6510 {
                     _ => unreachable!("Unexpected ROR execution cycle {}", self.cycle),
                 };
             }
+            Instruction::Dex => {
+                self.x = self.x.wrapping_sub(1);
+                self.set_nz_flags(self.x);
+            }
+            Instruction::Dec => {
+                match self.cycle {
+                    INSTRUCTION_EXECUTION_PHASE => {
+                        self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                        return BusOperation::Write(self.addr_latch, self.value_latch);
+                    }
+                    val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                        let res = self.value_latch.wrapping_sub(1);
+                        self.set_nz_flags(res);
+                        let addr = self.addr_latch;
+                        self.cycle = 0;
+                        self.value_latch = 0;
+                        self.addr_latch = 0;
+                        return BusOperation::Write(addr, res);
+                    }
+                    _ => unreachable!("Unexpected INC execution cycle {}", self.cycle),
+                };
+            }
             Instruction::Inc => {
                 match self.cycle {
                     INSTRUCTION_EXECUTION_PHASE => {
@@ -679,7 +707,6 @@ impl Mos6510 {
                     _ => unreachable!("Unexpected INC execution cycle {}", self.cycle),
                 };
             }
-
             Instruction::Anc => {
                 self.a &= self.value_latch;
                 self.set_nz_flags(self.a);
@@ -861,6 +888,15 @@ impl Mos6510 {
             0x76 => (Instruction::Ror, AddressingMode::ZeroPageX),
             0x7A => (Instruction::Nop, AddressingMode::Implied),
             0x7E => (Instruction::Ror, AddressingMode::AbsoluteX),
+            // DEC
+            0xC2 => (Instruction::Nop, AddressingMode::Immediate),
+            0xC6 => (Instruction::Dec, AddressingMode::ZeroPage),
+            0xCA => (Instruction::Dex, AddressingMode::Accumulator),
+            0xCE => (Instruction::Dec, AddressingMode::Absolute),
+            0xD2 => (Instruction::Jam, AddressingMode::Implied),
+            0xD6 => (Instruction::Dec, AddressingMode::ZeroPageX),
+            0xDA => (Instruction::Nop, AddressingMode::Implied),
+            0xDE => (Instruction::Dec, AddressingMode::AbsoluteX),
             // INC
             0xE2 => (Instruction::Nop, AddressingMode::Immediate),
             0xE6 => (Instruction::Inc, AddressingMode::ZeroPage),
@@ -1151,6 +1187,14 @@ mod tests {
         test_ror_zero_x   => "76.json",
         test_nop_7a       => "7a.json",
         test_ror_abs_x    => "7e.json",
+        test_nop_c2       => "c2.json",
+        test_dec_zero     => "c6.json",
+        test_dex          => "ca.json",
+        test_dec_abs      => "ce.json",
+        test_jam_d2       => "d2.json",
+        test_dec_zero_x   => "d6.json",
+        test_nop_da       => "da.json",
+        test_dec_abs_x    => "de.json",
         test_nop_e2       => "e2.json",
         test_inc_zero     => "e6.json",
         test_nop_ea       => "ea.json",
