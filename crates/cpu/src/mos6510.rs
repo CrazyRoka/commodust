@@ -30,6 +30,10 @@ enum AddressModeProcessingResult {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Instruction {
+    Brk,
+    Php,
+    Bpl,
+    Clc,
     Jsr,
     Bit,
     Plp,
@@ -106,6 +110,10 @@ enum Instruction {
 impl Instruction {
     fn is_writing(&self) -> bool {
         match self {
+            Self::Brk => false,
+            Self::Php => false,
+            Self::Bpl => false,
+            Self::Clc => false,
             Self::Jsr => false,
             Self::Bit => false,
             Self::Plp => false,
@@ -182,6 +190,10 @@ impl Instruction {
 
     fn is_reading_and_writing(&self) -> bool {
         match self {
+            Self::Brk => false,
+            Self::Php => false,
+            Self::Bpl => false,
+            Self::Clc => false,
             Self::Jsr => false,
             Self::Bit => false,
             Self::Plp => false,
@@ -652,6 +664,62 @@ impl Mos6510 {
         }
 
         match self.instruction {
+            Instruction::Brk => match self.cycle {
+                INSTRUCTION_EXECUTION_PHASE => {
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
+                    let addr = self.pc;
+                    self.pc = self.pc.wrapping_add(1);
+                    return BusOperation::Read(addr);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 1 => {
+                    let addr = 0x0100 | self.s as u16;
+                    self.s = self.s.wrapping_sub(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 2;
+                    return BusOperation::Write(addr, (self.pc >> 8) as u8);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
+                    let addr = 0x0100 | self.s as u16;
+                    self.s = self.s.wrapping_sub(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 3;
+                    return BusOperation::Write(addr, self.pc as u8);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 3 => {
+                    let addr = 0x0100 | self.s as u16;
+                    self.s = self.s.wrapping_sub(1);
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 4;
+                    return BusOperation::Write(
+                        addr,
+                        self.p | STATUS_REGISTER_BREAK | STATUS_REGISTER_UNUSED,
+                    );
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 4 => {
+                    self.p |= STATUS_REGISTER_INTERRUPT_DISABLE;
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 5;
+                    return BusOperation::Read(0xFFFE);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 5 => {
+                    self.addr_latch = data_in as u16;
+                    self.cycle = INSTRUCTION_EXECUTION_PHASE + 6;
+                    return BusOperation::Read(0xFFFF);
+                }
+                val if val == INSTRUCTION_EXECUTION_PHASE + 6 => {
+                    self.pc = self.addr_latch | ((data_in as u16) << 8);
+                    self.prepare_for_next_instruction();
+                    return self.step(0xFF);
+                }
+                _ => unreachable!(
+                    "Unexpected {:?} execution cycle {}",
+                    self.instruction, self.cycle
+                ),
+            },
+            Instruction::Php => {
+                let addr = 0x100 | self.s as u16;
+                self.s = self.s.wrapping_sub(1);
+                self.prepare_for_next_instruction();
+                return BusOperation::Write(addr, self.p | STATUS_REGISTER_BREAK);
+            }
+            Instruction::Bpl => return self.branch(self.p & STATUS_REGISTER_NEGATIVE == 0),
+            Instruction::Clc => self.p &= !STATUS_REGISTER_CARRY,
             Instruction::Jsr => match self.cycle {
                 INSTRUCTION_EXECUTION_PHASE => {
                     self.cycle = INSTRUCTION_EXECUTION_PHASE + 1;
@@ -1369,6 +1437,15 @@ impl Mos6510 {
         (self.instruction, self.addressing_mode) = match opcode {
             // Control Instructions block
             // JSR, BIT, PLP, BMI, SEC
+            0x00 => (Instruction::Brk, AddressingMode::Implied),
+            0x04 => (Instruction::Nop, AddressingMode::ZeroPage),
+            0x08 => (Instruction::Php, AddressingMode::Accumulator),
+            0x0C => (Instruction::Nop, AddressingMode::Absolute),
+            0x10 => (Instruction::Bpl, AddressingMode::Relative),
+            0x14 => (Instruction::Nop, AddressingMode::ZeroPageX),
+            0x18 => (Instruction::Clc, AddressingMode::Accumulator),
+            0x1C => (Instruction::Nop, AddressingMode::AbsoluteX),
+            // JSR, BIT, PLP, BMI, SEC
             0x20 => (Instruction::Jsr, AddressingMode::Implied),
             0x24 => (Instruction::Bit, AddressingMode::ZeroPage),
             0x28 => (Instruction::Plp, AddressingMode::Implied),
@@ -1650,7 +1727,6 @@ impl Mos6510 {
             0xF7 => (Instruction::Isc, AddressingMode::ZeroPageX),
             0xFB => (Instruction::Isc, AddressingMode::AbsoluteY),
             0xFF => (Instruction::Isc, AddressingMode::AbsoluteX),
-            _ => todo!("Unsupported opcode {:#02X}", opcode),
         };
     }
 
@@ -1948,6 +2024,14 @@ mod tests {
     }
 
     mos6502_tests! {
+        test_brk          => "00.json",
+        test_nop_04       => "04.json",
+        test_php          => "08.json",
+        test_nop_0c       => "0c.json",
+        test_bpl          => "10.json",
+        test_nop_14       => "14.json",
+        test_clc          => "18.json",
+        test_nop_1c       => "1c.json",
         test_jsr          => "20.json",
         test_bit_zero     => "24.json",
         test_plp          => "28.json",
