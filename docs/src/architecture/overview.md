@@ -2,6 +2,10 @@
 
 ## Bus Topology
 
+> See [Bus Operations](./bus_operations.md) for a consolidated reference
+> on bus masters, signals, access types, arbitration, and emulation
+> guidance.
+
 The Commodore 64 is built around a shared address/data bus connecting
 the 6510 CPU to 64 KB of DRAM, multiple ROMs, and several custom
 integrated circuits. The VIC-II acts as the bus master, generating

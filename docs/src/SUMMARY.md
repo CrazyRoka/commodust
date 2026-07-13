@@ -4,8 +4,10 @@
 
 # Architecture
 - [System Overview](./architecture/overview.md)
+- [Bus Operations](./architecture/bus_operations.md) 
 - [Memory Map](./architecture/memory_map.md)
 - [Memory Banking and Configuration](./architecture/banking.md)
+- [PLA (C64 chip)](./architecture/pla.md)
 
 # CPU — MOS 6510
 - [6510 Overview](./cpu/6510_overview.md)
