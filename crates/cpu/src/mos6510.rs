@@ -1,4 +1,4 @@
-use crate::mos6510::AddressingMode::AbsoluteX;
+use crate::mos6510::{AddressingMode::AbsoluteX, Interrupt::None};
 
 #[derive(Debug)]
 pub enum BusOperation {
@@ -269,6 +269,13 @@ impl Instruction {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
+enum Interrupt {
+    Irq,
+    Nmi,
+    None,
+}
+
 const STATUS_REGISTER_CARRY: u8 = 0x01;
 const STATUS_REGISTER_ZERO: u8 = 0x02;
 const STATUS_REGISTER_INTERRUPT_DISABLE: u8 = 0x04;
@@ -294,6 +301,9 @@ pub struct Mos6510 {
     value_latch: u8,
     addr_latch: u16,
     jammed: u8,
+    pending_irq: bool,
+    pending_nmi: bool,
+    interrupt: Interrupt,
 }
 
 impl Mos6510 {
@@ -311,6 +321,9 @@ impl Mos6510 {
             value_latch: 0,
             addr_latch: 0,
             jammed: 0,
+            pending_irq: false,
+            pending_nmi: false,
+            interrupt: Interrupt::None,
         }
     }
 
@@ -328,10 +341,23 @@ impl Mos6510 {
         }
 
         if self.cycle == 0 {
-            let addr = self.pc;
-            self.pc = self.pc.wrapping_add(1);
-            self.cycle = 1;
-            return BusOperation::Read(addr);
+            if self.pending_nmi {
+                self.pending_nmi = false;
+                self.interrupt = Interrupt::Nmi
+            } else if self.pending_irq && self.p & STATUS_REGISTER_INTERRUPT_DISABLE == 0 {
+                self.pending_irq = false;
+                self.interrupt = Interrupt::Irq
+            } else {
+                self.interrupt = None;
+                let addr = self.pc;
+                self.pc = self.pc.wrapping_add(1);
+                self.cycle = 1;
+                return BusOperation::Read(addr);
+            }
+        }
+
+        if self.interrupt != Interrupt::None {
+            return self.handle_interrupt(data_in);
         }
 
         if self.cycle == 1 {
@@ -1920,15 +1946,362 @@ impl Mos6510 {
         self.prepare_for_next_instruction();
         self.step(0xFF)
     }
+
+    pub fn irq(&mut self) {
+        self.pending_irq = true;
+    }
+
+    pub fn nmi(&mut self) {
+        self.pending_nmi = true;
+    }
+
+    fn handle_interrupt(&mut self, data_in: u8) -> BusOperation {
+        let vector = match self.interrupt {
+            Interrupt::Irq => 0xFFFE,
+            Interrupt::Nmi => 0xFFFA,
+            None => unreachable!("NONE interrupt is impossible to reach"),
+        };
+        return match self.cycle {
+            0 => {
+                self.cycle = 1;
+                BusOperation::Read(self.pc)
+            }
+            1 => {
+                self.cycle = 2;
+                BusOperation::Read(self.pc.wrapping_add(1))
+            }
+            2 => {
+                self.cycle = 3;
+                self.s = self.s.wrapping_sub(1);
+                BusOperation::Write(
+                    0x100 | (self.s.wrapping_add(1) as u16),
+                    (self.pc >> 8) as u8,
+                )
+            }
+            3 => {
+                self.cycle = 4;
+                self.s = self.s.wrapping_sub(1);
+                BusOperation::Write(
+                    0x100 | (self.s.wrapping_add(1) as u16),
+                    (self.pc & 0xFF) as u8,
+                )
+            }
+            4 => {
+                self.cycle = 5;
+                self.s = self.s.wrapping_sub(1);
+                BusOperation::Write(
+                    0x100 | (self.s.wrapping_add(1) as u16),
+                    self.p | STATUS_REGISTER_UNUSED,
+                )
+            }
+            5 => {
+                self.cycle = 6;
+                BusOperation::Read(vector)
+            }
+            6 => {
+                self.cycle = 7;
+                self.addr_latch = data_in as u16;
+                BusOperation::Read(vector + 1)
+            }
+            7 => {
+                self.addr_latch |= (data_in as u16) << 8;
+                self.pc = self.addr_latch;
+                self.p |= STATUS_REGISTER_INTERRUPT_DISABLE;
+                self.prepare_for_next_instruction();
+                self.step(0xFF)
+            }
+            _ => unreachable!(
+                "Unexpected cycle {} during {:?} interrupt handling",
+                self.cycle, self.interrupt
+            ),
+        };
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        Mos6510,
+        mos6510::{BusOperation, STATUS_REGISTER_DECIMAL_MODE, STATUS_REGISTER_INTERRUPT_DISABLE},
+    };
+    use serde::Deserialize;
     use std::{collections::HashMap, fs, path::Path};
 
-    use serde::Deserialize;
+    fn assert_read_op(op: BusOperation, expected_addr: u16) {
+        match op {
+            BusOperation::Read(addr) => assert_eq!(addr, expected_addr, "Read address mismatch"),
+            other => panic!("Expected Read(0x{:04X}), got {:?}", expected_addr, other),
+        }
+    }
 
-    use crate::{Mos6510, mos6510::BusOperation};
+    fn assert_write_op(op: BusOperation, expected_addr: u16, expected_val: u8) {
+        match op {
+            BusOperation::Write(addr, val) => {
+                assert_eq!(addr, expected_addr, "Write address mismatch");
+                assert_eq!(val, expected_val, "Write value mismatch");
+            }
+            other => panic!(
+                "Expected Write(0x{:04X}, 0x{:02X}), got {:?}",
+                expected_addr, expected_val, other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_irq_basic_sequence() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x1000;
+        cpu.s = 0xFF;
+        cpu.p = 0x00; // I flag clear so IRQ is taken
+
+        cpu.irq();
+
+        // Cycle 1: Dummy read from PC (PC not incremented)
+        assert_read_op(cpu.step(0xFF), 0x1000);
+        // Cycle 2: Dummy read from PC + 1
+        assert_read_op(cpu.step(0xEA), 0x1001);
+        // Cycle 3: Push PC high (S=0xFF -> 0x01FF)
+        assert_write_op(cpu.step(0xFF), 0x01FF, 0x10);
+        // Cycle 4: Push PC low (S=0xFE -> 0x01FE)
+        assert_write_op(cpu.step(0xFF), 0x01FE, 0x00);
+        // Cycle 5: Push status — B=0, unused=1 (S=0xFD -> 0x01FD)
+        assert_write_op(cpu.step(0xFF), 0x01FD, 0x20);
+        // Cycle 6: Read IRQ vector low from 0xFFFE
+        assert_read_op(cpu.step(0xFF), 0xFFFE);
+        // Cycle 7: Read IRQ vector high from 0xFFFF
+        assert_read_op(cpu.step(0x34), 0xFFFF);
+        // After interrupt: fetch opcode from vector address 0x1234
+        assert_read_op(cpu.step(0x12), 0x1234);
+
+        assert_eq!(cpu.pc, 0x1235); // PC incremented after opcode fetch
+        assert_eq!(cpu.s, 0xFC); // Stack pointer decremented by 3
+        assert_eq!(
+            cpu.p & STATUS_REGISTER_INTERRUPT_DISABLE,
+            STATUS_REGISTER_INTERRUPT_DISABLE
+        );
+    }
+
+    #[test]
+    fn test_irq_not_taken_when_interrupts_disabled() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x1000;
+        cpu.s = 0xFF;
+        cpu.p = STATUS_REGISTER_INTERRUPT_DISABLE; // I flag set
+
+        cpu.irq();
+
+        // CPU fetches opcode normally — IRQ not serviced
+        assert_read_op(cpu.step(0xFF), 0x1000);
+        // Stack unchanged — no interrupt push happened
+        assert_eq!(cpu.s, 0xFF);
+    }
+
+    #[test]
+    fn test_irq_pushes_b_flag_clear() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x1000;
+        cpu.s = 0xFF;
+        cpu.p = 0x00;
+
+        cpu.irq();
+
+        cpu.step(0xFF); // Read PC
+        cpu.step(0xFF); // Read PC+1
+        cpu.step(0xFF); // Push PC high
+        cpu.step(0xFF); // Push PC low
+
+        // Pushed status must have B=0, unused=1 — unlike BRK which pushes B=1
+        assert_write_op(cpu.step(0xFF), 0x01FD, 0x20);
+    }
+
+    #[test]
+    fn test_irq_preserves_decimal_flag_in_pushed_status() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x1000;
+        cpu.s = 0xFF;
+        cpu.p = STATUS_REGISTER_DECIMAL_MODE; // D flag set, I flag clear
+
+        cpu.irq();
+
+        cpu.step(0xFF); // Read PC
+        cpu.step(0xFF); // Read PC+1
+        cpu.step(0xFF); // Push PC high
+        cpu.step(0xFF); // Push PC low
+
+        // D=1, B=0, unused=1 => 0x28 — CPU does NOT clear D flag
+        assert_write_op(cpu.step(0xFF), 0x01FD, 0x28);
+    }
+
+    #[test]
+    fn test_nmi_basic_sequence() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x2000;
+        cpu.s = 0xFF;
+        cpu.p = 0x00;
+
+        cpu.nmi();
+
+        // Cycle 1: Dummy read from PC
+        assert_read_op(cpu.step(0xFF), 0x2000);
+        // Cycle 2: Dummy read from PC + 1
+        assert_read_op(cpu.step(0xFF), 0x2001);
+        // Cycle 3: Push PC high
+        assert_write_op(cpu.step(0xFF), 0x01FF, 0x20);
+        // Cycle 4: Push PC low
+        assert_write_op(cpu.step(0xFF), 0x01FE, 0x00);
+        // Cycle 5: Push status — B=0, unused=1
+        assert_write_op(cpu.step(0xFF), 0x01FD, 0x20);
+        // Cycle 6: Read NMI vector low from 0xFFFA
+        assert_read_op(cpu.step(0xFF), 0xFFFA);
+        // Cycle 7: Read NMI vector high from 0xFFFB
+        assert_read_op(cpu.step(0x78), 0xFFFB);
+        // After interrupt: fetch opcode from vector address 0x5678
+        assert_read_op(cpu.step(0x56), 0x5678);
+
+        assert_eq!(cpu.pc, 0x5679);
+        assert_eq!(cpu.s, 0xFC);
+        assert_eq!(
+            cpu.p & STATUS_REGISTER_INTERRUPT_DISABLE,
+            STATUS_REGISTER_INTERRUPT_DISABLE
+        );
+    }
+
+    #[test]
+    fn test_nmi_taken_when_interrupts_disabled() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x2000;
+        cpu.s = 0xFF;
+        cpu.p = STATUS_REGISTER_INTERRUPT_DISABLE; // I flag set
+
+        cpu.nmi();
+
+        // NMI is taken regardless of I flag
+        assert_read_op(cpu.step(0xFF), 0x2000);
+        assert_read_op(cpu.step(0xFF), 0x2001);
+        assert_write_op(cpu.step(0xFF), 0x01FF, 0x20);
+        assert_write_op(cpu.step(0xFF), 0x01FE, 0x00);
+        // Pushed status: B=0, unused=1, I=1 => 0x24
+        assert_write_op(cpu.step(0xFF), 0x01FD, 0x24);
+        assert_read_op(cpu.step(0xFF), 0xFFFA);
+        assert_read_op(cpu.step(0x78), 0xFFFB);
+        assert_read_op(cpu.step(0x56), 0x5678);
+    }
+
+    #[test]
+    fn test_nmi_pushes_b_flag_clear() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x2000;
+        cpu.s = 0xFF;
+        cpu.p = 0x00;
+
+        cpu.nmi();
+
+        cpu.step(0xFF); // Read PC
+        cpu.step(0xFF); // Read PC+1
+        cpu.step(0xFF); // Push PC high
+        cpu.step(0xFF); // Push PC low
+
+        // Pushed status must have B=0, unused=1
+        assert_write_op(cpu.step(0xFF), 0x01FD, 0x20);
+    }
+
+    #[test]
+    fn test_irq_pushes_correct_return_address() {
+        // The PC pushed to the stack is the address of the next instruction
+        // (where the opcode would have been fetched), NOT PC+1 like BRK.
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0xABCD;
+        cpu.s = 0xFF;
+        cpu.p = 0x00;
+
+        cpu.irq();
+
+        cpu.step(0xFF); // Read PC (0xABCD)
+        cpu.step(0xFF); // Read PC+1 (0xABCE)
+
+        // Push PC high — should be 0xAB (from 0xABCD, not 0xABCE)
+        assert_write_op(cpu.step(0xFF), 0x01FF, 0xAB);
+        // Push PC low — should be 0xCD
+        assert_write_op(cpu.step(0xFF), 0x01FE, 0xCD);
+    }
+
+    #[test]
+    fn test_nmi_pushes_correct_return_address() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0xBEEF;
+        cpu.s = 0xFF;
+        cpu.p = 0x00;
+
+        cpu.nmi();
+
+        cpu.step(0xFF); // Read PC (0xBEEF)
+        cpu.step(0xFF); // Read PC+1 (0xBEF0)
+
+        // Push PC high — should be 0xBE (from 0xBEEF)
+        assert_write_op(cpu.step(0xFF), 0x01FF, 0xBE);
+        // Push PC low — should be 0xEF
+        assert_write_op(cpu.step(0xFF), 0x01FE, 0xEF);
+    }
+
+    #[test]
+    fn test_nmi_mid_instruction_deferred() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x1000;
+        cpu.s = 0xFF;
+        cpu.p = 0x00;
+
+        // Cycle 0: Read opcode
+        assert_read_op(cpu.step(0xFF), 0x1000);
+
+        // Trigger NMI mid-instruction (Cycle 1, before the final cycle of NOP)
+        cpu.nmi();
+
+        // Cycle 1 of NOP (0xEA): Dummy read
+        assert_read_op(cpu.step(0xEA), 0x1001);
+
+        // Since the instruction has completed, the next step begins the NMI sequence.
+        // Cycle 1 of NMI: Dummy read from PC (0x1001)
+        assert_read_op(cpu.step(0xFF), 0x1001);
+
+        // Cycle 2 of NMI: Dummy read from PC + 1 (0x1002)
+        assert_read_op(cpu.step(0xFF), 0x1002);
+
+        // Cycle 3 of NMI: Push PC high (0x10) to 0x01FF
+        assert_write_op(cpu.step(0xFF), 0x01FF, 0x10);
+
+        // Cycle 4 of NMI: Push PC low (0x01) to 0x01FE
+        assert_write_op(cpu.step(0xFF), 0x01FE, 0x01);
+    }
+
+    #[test]
+    fn test_irq_mid_instruction_deferred() {
+        let mut cpu = Mos6510::init();
+        cpu.pc = 0x1000;
+        cpu.s = 0xFF;
+        cpu.p = 0x00; // Interrupts enabled
+
+        // Cycle 0: Read opcode
+        assert_read_op(cpu.step(0xFF), 0x1000);
+
+        // Trigger NMI mid-instruction (Cycle 1, before the final cycle of NOP)
+        cpu.irq();
+
+        // Cycle 1 of NOP (0xEA): Dummy read
+        assert_read_op(cpu.step(0xEA), 0x1001);
+
+        // Now that the instruction is complete, the IRQ sequence starts.
+        // Cycle 1 of IRQ: Dummy read from PC (0x1001)
+        assert_read_op(cpu.step(0xFF), 0x1001);
+
+        // Cycle 2 of IRQ: Dummy read from PC + 1 (0x1002)
+        assert_read_op(cpu.step(0xFF), 0x1002);
+
+        // Cycle 3 of IRQ: Push PC high (0x10) to 0x01FF
+        assert_write_op(cpu.step(0xFF), 0x01FF, 0x10);
+
+        // Cycle 4 of IRQ: Push PC low (0x01) to 0x01FE
+        assert_write_op(cpu.step(0xFF), 0x01FE, 0x01);
+    }
 
     #[derive(Deserialize)]
     struct TestCaseState {
