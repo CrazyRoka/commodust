@@ -504,10 +504,10 @@ impl Mos6510 {
                         ))
                     }
                     4 => {
-                        let page_cross = self.addr_latch.wrapping_add(add as u16) & 0xFF00
+                        let no_page_cross = self.addr_latch.wrapping_add(add as u16) & 0xFF00
                             == self.addr_latch & 0xFF00;
                         self.addr_latch = self.addr_latch.wrapping_add(add as u16);
-                        if !self.instruction.is_reading_and_writing() && page_cross
+                        if !self.instruction.is_reading_and_writing() && no_page_cross
                             || self.instruction.is_writing()
                         {
                             self.value_latch = data_in;
@@ -716,7 +716,10 @@ impl Mos6510 {
                 let addr = 0x100 | self.s as u16;
                 self.s = self.s.wrapping_sub(1);
                 self.prepare_for_next_instruction();
-                return BusOperation::Write(addr, self.p | STATUS_REGISTER_BREAK);
+                return BusOperation::Write(
+                    addr,
+                    self.p | STATUS_REGISTER_BREAK | STATUS_REGISTER_UNUSED,
+                );
             }
             Instruction::Bpl => return self.branch(self.p & STATUS_REGISTER_NEGATIVE == 0),
             Instruction::Clc => self.p &= !STATUS_REGISTER_CARRY,
@@ -782,7 +785,10 @@ impl Mos6510 {
                     self.prepare_for_next_instruction();
                     return BusOperation::Read(self.pc);
                 }
-                _ => unreachable!("Unexpected PLP execution cycle {}", self.cycle),
+                _ => unreachable!(
+                    "Unexpected {:?} execution cycle {}",
+                    self.instruction, self.cycle
+                ),
             },
             Instruction::Bit => {
                 let res = self.a & self.value_latch;
@@ -875,7 +881,10 @@ impl Mos6510 {
                     self.prepare_for_next_instruction();
                     return BusOperation::Read(self.pc.wrapping_sub(1));
                 }
-                _ => unreachable!("Unexpected RTS execution cycle {}", self.cycle),
+                _ => unreachable!(
+                    "Unexpected {:?} execution cycle {}",
+                    self.instruction, self.cycle
+                ),
             },
             Instruction::Pla => match self.cycle {
                 INSTRUCTION_EXECUTION_PHASE => {
@@ -897,7 +906,10 @@ impl Mos6510 {
                     self.prepare_for_next_instruction();
                     return BusOperation::Read(self.pc);
                 }
-                _ => unreachable!("Unexpected PLA execution cycle {}", self.cycle),
+                _ => unreachable!(
+                    "Unexpected {:?} execution cycle {}",
+                    self.instruction, self.cycle
+                ),
             },
             Instruction::Jmp => {
                 self.pc = self.addr_latch;
@@ -1026,7 +1038,10 @@ impl Mos6510 {
                         self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected ASL execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Rol => {
@@ -1062,7 +1077,10 @@ impl Mos6510 {
                         self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected ROL execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Lsr => {
@@ -1088,7 +1106,10 @@ impl Mos6510 {
                         self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected LSR execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Ror => {
@@ -1124,7 +1145,10 @@ impl Mos6510 {
                         self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected ROR execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Stx => {
@@ -1180,7 +1204,10 @@ impl Mos6510 {
                         self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected INC execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Inc => {
@@ -1196,7 +1223,10 @@ impl Mos6510 {
                         self.prepare_for_next_instruction();
                         return BusOperation::Write(addr, res);
                     }
-                    _ => unreachable!("Unexpected INC execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Anc => {
@@ -1220,7 +1250,10 @@ impl Mos6510 {
                         self.set_carry(carry);
                         BusOperation::Write(addr, res)
                     }
-                    _ => unreachable!("Unexpected SLO execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Rla => {
@@ -1244,7 +1277,10 @@ impl Mos6510 {
                         self.set_carry(carry);
                         BusOperation::Write(addr, res)
                     }
-                    _ => unreachable!("Unexpected RLA execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Alr => {
@@ -1269,7 +1305,10 @@ impl Mos6510 {
                         self.set_carry(carry);
                         BusOperation::Write(addr, res)
                     }
-                    _ => unreachable!("Unexpected SRE execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Rra => {
@@ -1288,7 +1327,10 @@ impl Mos6510 {
                         self.run_adc(res);
                         BusOperation::Write(addr, res)
                     }
-                    _ => unreachable!("Unexpected RRA execution cycle {}", self.cycle),
+                    _ => unreachable!(
+                        "Unexpected {:?} execution cycle {}",
+                        self.instruction, self.cycle
+                    ),
                 };
             }
             Instruction::Arr => {
@@ -1869,7 +1911,10 @@ impl Mos6510 {
             val if val == INSTRUCTION_EXECUTION_PHASE + 2 => {
                 self.pc = self.addr_latch;
             }
-            _ => unreachable!("Unexpected BCS execution cycle {}", self.cycle),
+            _ => unreachable!(
+                "Unexpected {:?} execution cycle {}",
+                self.instruction, self.cycle
+            ),
         }
 
         self.prepare_for_next_instruction();
