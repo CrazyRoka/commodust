@@ -307,7 +307,7 @@ pub struct Mos6510 {
 }
 
 impl Mos6510 {
-    pub fn init() -> Self {
+    pub fn new() -> Self {
         Self {
             a: 0,
             x: 0,
@@ -325,6 +325,10 @@ impl Mos6510 {
             pending_nmi: false,
             interrupt: Interrupt::None,
         }
+    }
+
+    pub fn set_pc(&mut self, pc: u16) {
+        self.pc = pc;
     }
 
     pub fn step(&mut self, data_in: u8) -> BusOperation {
@@ -2049,7 +2053,7 @@ mod tests {
 
     #[test]
     fn test_irq_basic_sequence() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x1000;
         cpu.s = 0xFF;
         cpu.p = 0x00; // I flag clear so IRQ is taken
@@ -2083,7 +2087,7 @@ mod tests {
 
     #[test]
     fn test_irq_not_taken_when_interrupts_disabled() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x1000;
         cpu.s = 0xFF;
         cpu.p = STATUS_REGISTER_INTERRUPT_DISABLE; // I flag set
@@ -2098,7 +2102,7 @@ mod tests {
 
     #[test]
     fn test_irq_pushes_b_flag_clear() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x1000;
         cpu.s = 0xFF;
         cpu.p = 0x00;
@@ -2116,7 +2120,7 @@ mod tests {
 
     #[test]
     fn test_irq_preserves_decimal_flag_in_pushed_status() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x1000;
         cpu.s = 0xFF;
         cpu.p = STATUS_REGISTER_DECIMAL_MODE; // D flag set, I flag clear
@@ -2134,7 +2138,7 @@ mod tests {
 
     #[test]
     fn test_nmi_basic_sequence() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x2000;
         cpu.s = 0xFF;
         cpu.p = 0x00;
@@ -2168,7 +2172,7 @@ mod tests {
 
     #[test]
     fn test_nmi_taken_when_interrupts_disabled() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x2000;
         cpu.s = 0xFF;
         cpu.p = STATUS_REGISTER_INTERRUPT_DISABLE; // I flag set
@@ -2189,7 +2193,7 @@ mod tests {
 
     #[test]
     fn test_nmi_pushes_b_flag_clear() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x2000;
         cpu.s = 0xFF;
         cpu.p = 0x00;
@@ -2209,7 +2213,7 @@ mod tests {
     fn test_irq_pushes_correct_return_address() {
         // The PC pushed to the stack is the address of the next instruction
         // (where the opcode would have been fetched), NOT PC+1 like BRK.
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0xABCD;
         cpu.s = 0xFF;
         cpu.p = 0x00;
@@ -2227,7 +2231,7 @@ mod tests {
 
     #[test]
     fn test_nmi_pushes_correct_return_address() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0xBEEF;
         cpu.s = 0xFF;
         cpu.p = 0x00;
@@ -2245,7 +2249,7 @@ mod tests {
 
     #[test]
     fn test_nmi_mid_instruction_deferred() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x1000;
         cpu.s = 0xFF;
         cpu.p = 0x00;
@@ -2275,7 +2279,7 @@ mod tests {
 
     #[test]
     fn test_irq_mid_instruction_deferred() {
-        let mut cpu = Mos6510::init();
+        let mut cpu = Mos6510::new();
         cpu.pc = 0x1000;
         cpu.s = 0xFF;
         cpu.p = 0x00; // Interrupts enabled
@@ -2316,7 +2320,7 @@ mod tests {
 
     impl TestCaseState {
         fn create_cpu(&self) -> Mos6510 {
-            let mut cpu = Mos6510::init();
+            let mut cpu = Mos6510::new();
 
             cpu.pc = self.pc;
             cpu.s = self.s;

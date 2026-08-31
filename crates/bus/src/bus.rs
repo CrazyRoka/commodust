@@ -70,11 +70,6 @@ impl Bus {
             {
                 self.read_io(addr)
             }
-            0xD000..=0xDFFF
-                if (self.data_port & CHAREN != 0) && (self.data_port & (LORAM | HIRAM) != 0) =>
-            {
-                self.read_io(addr)
-            }
             0xD000..=0xDFFF if self.data_port & (LORAM | HIRAM) != 0 => {
                 self.rom[addr as usize - 0xD000 + CHAR_ROM_OFFSET]
             }
