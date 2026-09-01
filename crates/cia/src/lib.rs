@@ -1,1 +1,2 @@
+mod clock;
 mod timer;

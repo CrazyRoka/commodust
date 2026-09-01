@@ -888,7 +888,7 @@ mod tests {
     #[test]
     fn reading_the_timer_does_not_clear_the_event() {
         // Only an ICR read clears flags on real hardware ($DC04/$DC05 do not).
-        let mut t = expired_one_shot(4);
+        let t = expired_one_shot(4);
         let _ = t.read_low();
         let _ = t.read_high();
         assert!(t.underflow());
