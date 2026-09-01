@@ -11,12 +11,13 @@ interrupt when the clock reaches a programmed alarm time.
 | $08 | TODTEN | 0–3 | Tenths of seconds (BCD: 0–9) |
 | $09 | TODSEC | 0–6 | Seconds (BCD: 00–59) |
 | $0A | TODMIN | 0–6 | Minutes (BCD: 00–59) |
-| $0B | TODHRS | 0–4, 7 | Hours (BCD: 01–12) + AM/PM flag (bit 7) |
+| $0B | TODHRS | 0–4, 7 | Hours (BCD: 01–12) + AM/PM flag (bit 7: 1 = PM, 0 = AM) |
 
 ### BCD Format
 
-Each register stores two decimal digits in a single byte, one digit per
-nybble. For example, 42 seconds is stored as `%01000010` ($42), not `$2A`.
+Each register stores two decimal digits in a single byte, one digit per nybble.
+Unused bits are forced to `0` when read. For example, 42 seconds is stored
+as `%01000010` ($42), not `$2A`.
 
 | Register | Low Nybble | High Nybble |
 |---|---|---|
@@ -25,14 +26,14 @@ nybble. For example, 42 seconds is stored as `%01000010` ($42), not `$2A`.
 | TODMIN | Minutes ones (0–9) | Minutes tens (0–5) |
 | TODHRS | Hours ones (0–9) | Hours tens (0–1) |
 
-### Hours Register ($0B) Layout
+### Detailed Bit Layout
 
-| Bit | Description |
-|---|---|
-| 0–3 | Hours ones digit (BCD 0–9) |
-| 4 | Hours tens digit (BCD 0–1) |
-| 5–6 | Unused |
-| 7 | AM/PM flag (1 = PM, 0 = AM) |
+| Register | D7 | D6 | D5 | D4 | D3 | D2 | D1 | D0 |
+|---|---|---|---|---|---|---|---|---|
+| **TODTEN ($08)** | 0 | 0 | 0 | 0 | T8 | T4 | T2 | T1 |
+| **TODSEC ($09)** | 0 | SH4 | SH2 | SH1 | SL8 | SL4 | SL2 | SL1 |
+| **TODMIN ($0A)** | 0 | MH4 | MH2 | MH1 | ML8 | ML4 | ML2 | ML1 |
+| **TODHRS ($0B)** | PM | 0 | 0 | HH | HL8 | HL4 | HL2 | HL1 |
 
 Hours range from 01 to 12 in 12-hour format. There is no 24-hour mode.
 
@@ -41,7 +42,9 @@ Hours range from 01 to 12 in 12-hour format. There is no 24-hour mode.
 ### Reading (Latch on Hours)
 
 Reading the **hours** register ($0B) **freezes** all four TOD registers.
-The registers remain frozen (latched) until the **tenths** register ($08)
+While latched, the internal clock continues to count in the background.
+
+The output registers remain frozen until the **tenths** register ($08)
 is read. This prevents time-skew when reading multi-register time values.
 
 To safely read the full time:
@@ -50,8 +53,8 @@ To safely read the full time:
 3. Read seconds ($09)
 4. Read tenths ($08) — this unlatches the registers
 
-If you only need to read seconds, minutes, or tenths individually, no
-latching occurs. Latching only triggers on reading the hours register.
+If only one register needs to be read, it can be read "on the fly" without
+latching, provided that if Hours is ever read, Tenths is also read to clear the latch.
 
 ### Writing (Stop on Hours)
 
@@ -70,10 +73,13 @@ To set the time:
 Bit 7 of Control Register B ($0F) selects whether writes to TOD registers
 set the **clock time** or the **alarm time**:
 
-| CRB Bit 7 | Write Target |
-|---|---|
-| 0 | Alarm time |
-| 1 | Clock time |
+| CRB Bit 7 | Mode | Write Target |
+|---|---|---|
+| 0 | TOD | Clock time |
+| 1 | ALARM | Alarm time |
+
+**Read note:** The ALARM registers are write-only. Reading any TOD address
+always returns the current clock time regardless of the state of CRB bit 7.
 
 When the clock time reaches the alarm time, ICR bit 2 is set. If the TOD
 alarm interrupt is enabled (via ICR bit 2 mask), an interrupt is generated.

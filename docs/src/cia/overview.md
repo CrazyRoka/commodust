@@ -43,6 +43,16 @@ a chip's 256-byte region is a mirror.
 | FLAG pin | Cassette read line | User Port pin B |
 | System use | Keyboard scan, 1/60s IRQ, tape timing | RS-232 timing, serial bus |
 
+## Reset State (/RES)
+
+A low signal on the `/RES` pin resets all internal registers:
+- Data Direction Registers (DDRA, DDRB) are set to `$00` (all pins configured as inputs).
+- Port Data Registers (PRA, PRB) are cleared to `$00` (reads will return `$FF` due to passive on-chip pullups).
+- Timer Control Registers (CRA, CRB) are cleared to `$00`.
+- Timer latches (TA, TB) are initialized to all ones (`$FFFF`).
+- All other registers (including ICR mask and SDR) are reset to `$00`.
+- All unused register bits are unaffected by writes and forced to `0` on read.
+
 ## Interrupt Control Register ($0D)
 
 This register has dual read/write behavior:
@@ -106,6 +116,28 @@ external logic level can be read.
 Timer B can output to bit 7 of Port B, overriding the normal data port
 value. This is controlled by bits 1–2 of the respective control
 register.
+
+## Handshaking (/PC and /FLAG)
+
+- **/PC (Port Control) output:** Goes low for 1 clock cycle following any read
+  or write of Port B. This signal can indicate "data ready" or "data accepted".
+- **/FLAG input:** A negative-edge sensitive input that sets bit 4 in the ICR.
+  It can receive the `/PC` output from another CIA or act as a general-purpose
+  hardware interrupt line.
+
+## Serial Data Register (SDR)
+
+The serial port is a buffered 8-bit synchronous shift register:
+- **Input Mode (CRA bit 6 = 0):** Data on the SP pin is shifted in on each
+  rising edge of the CNT clock input (MSB first). After 8 pulses, the byte is
+  transferred into the SDR and ICR bit 3 is set.
+- **Output Mode (CRA bit 6 = 1):** Timer A acts as the baud rate generator.
+  Data in the SDR is shifted out onto the SP pin at **1/2 the underflow rate
+  of Timer A** (MSB first, max speed ø2 / 4). The clock appears on the CNT pin.
+  Data becomes valid on the falling edge of CNT.
+- **Transmission Strobe:** Writing to the SDR begins transmission as long as
+  Timer A is running in continuous mode. If new data is written before the 8th
+  pulse completes, transmission continues uninterrupted.
 
 ## Time of Day Clock
 

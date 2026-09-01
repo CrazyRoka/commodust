@@ -20,6 +20,7 @@ clock rate and can generate interrupts on underflow.
 Writing to a timer register pair loads the 16-bit **latch** value. The latch
 holds the reload value; it does not immediately affect the running timer
 counter. The latch is copied to the counter when:
+- The high byte of the timer latch (TAHI or TBHI) is written while the timer is stopped, or
 - The timer is started (bit 0 of control register set to 1) and the counter
   has not yet been loaded, or
 - The force load strobe (bit 4 of control register) is set to 1, or
@@ -61,7 +62,7 @@ clock cycle. When the counter reaches zero:
 | 2 | $04 | Port B output mode (1 = toggle bit 6, 0 = pulse bit 6 for 1 cycle) |
 | 3 | $08 | Run mode (1 = one-shot, 0 = continuous) |
 | 4 | $10 | Force load (1 = strobe latch into counter) |
-| 5 | $20 | Input source (1 = system clock, 0 = CNT pin / User Port pin 4) |
+| 5 | $20 | Input mode (0 = system clock / ø2 pulses, 1 = CNT pin positive transitions) |
 | 6 | $40 | Serial port direction (1 = output, 0 = input) |
 | 7 | $80 | TOD clock frequency (1 = 50 Hz, 0 = 60 Hz) |
 
@@ -73,8 +74,8 @@ initialize the counter before starting the timer, or to reset it mid-count.
 
 ### Bit 5 — Input Source
 
-When bit 5 = 1 (default), Timer A counts system clock cycles. When bit 5 = 0,
-Timer A counts pulses on the CNT line (pin 4 of the User Port for CIA #1;
+When bit 5 = 0 (default), Timer A counts system clock (ø2) pulses. When bit 5 = 1,
+Timer A counts positive transitions on the CNT line (pin 4 of the User Port for CIA #1;
 also connected to pin C of the User Port). This allows the CIA to function
 as an external event counter or frequency counter.
 
@@ -96,8 +97,8 @@ as an external event counter or frequency counter.
 | Bit 6 | Bit 5 | Input Source |
 |---|---|---|
 | 0 | 0 | System clock (default) |
-| 0 | 1 | CNT pin (User Port pin 4) |
-| 1 | 0 | Timer A underflow pulses |
+| 0 | 1 | Positive CNT transitions (User Port pin 4) |
+| 1 | 0 | Timer A underflow pulses (chained mode) |
 | 1 | 1 | Timer A underflow when CNT is also active |
 
 When Timer B counts Timer A underflows, the two timers are effectively
@@ -118,7 +119,8 @@ that bit. The output mode (bit 2) selects:
 - **Pulse mode (bit 2 = 0):** The output bit goes high for one machine cycle
   on timer underflow, then returns low.
 - **Toggle mode (bit 2 = 1):** The output bit flips state on each timer
-  underflow (0→1→0→1...).
+  underflow (0→1→0→1...). The toggle output is initialized high whenever the
+  timer is started, and reset to low on hardware reset (/RES).
 
 ## System Usage of CIA #1 Timers
 
