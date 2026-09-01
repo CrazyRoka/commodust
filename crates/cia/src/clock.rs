@@ -34,7 +34,6 @@ struct Clock {
     mode: ClockMode,
     frequency: Frequency,
     stopped: bool,
-    running: bool,
     alarm_pending: bool,
     divider: u8,
 }
@@ -49,49 +48,49 @@ impl Clock {
     /// $DC0B — hours, BCD 01–12 in bits 0–5, AM/PM flag in bit 7.
     const HOURS: u8 = 3;
 
-    /// Post-/RES state: everything zero (hours $00 is the documented
-    /// power-on value, ticking up to $01 at the first hour carry),
-    /// mode Clock, F50, RUNNING, divider 0, no pending alarm.
-    /// Must initialise alarm_pending = false and divider = 0.
+    /// Post-/RES state: the clock is STOPPED at 1:00:00.0 AM —
+    /// "following a hardware reset, the clock will start at 1:00:00.0"
+    /// once nudged by a tenths write — with the rest of the clock and
+    /// the whole alarm zero, mode Clock, F50, divider 0, no pending
+    /// alarm.
     fn new() -> Self {
         Self {
             alarm: Registers::default(),
-            registers: Registers::default(),
+            registers: Registers {
+                hours: 0x01,
+                ..Default::default()
+            },
             latch: None,
             mode: ClockMode::Clock,
             frequency: Frequency::F50,
-            stopped: false,
-            running: true,
+            stopped: true,
             alarm_pending: false,
             divider: 0,
         }
     }
 
     /// Read one TOD register. Has side effects: see the CONTRACT in the
-    /// tests (latch set/release in Clock mode; bank depends on mode).
+    /// tests (latch set/release). Reads ALWAYS address the live clock,
+    /// via the latch — the ALARM is write-only, so any read of a TOD
+    /// address reads time regardless of CRB bit 7.
     fn read(&mut self, offset: u8) -> u8 {
-        let register = match self.mode {
-            ClockMode::Alarm => self.alarm,
-            ClockMode::Clock => {
-                if (offset & 0x03) == Self::HOURS && self.latch == None {
-                    self.latch = Some(self.registers.clone())
-                }
-                self.latch.unwrap_or(self.registers)
-            }
-        };
+        if (offset & 0x03) == Self::HOURS && self.latch.is_none() {
+            self.latch = Some(self.registers);
+        }
+        let register = self.latch.unwrap_or(self.registers);
 
-        match offset & 0x03 {
-            Self::TENTHS => {
-                if self.mode == ClockMode::Clock {
-                    self.latch = None;
-                }
-                register.tenths
-            }
+        let value = match offset & 0x03 {
+            Self::TENTHS => register.tenths,
             Self::SECONDS => register.seconds,
             Self::MINUTES => register.minutes,
             Self::HOURS => register.hours,
             _ => unreachable!("Unexpected Clock register read at offset {offset:02X}"),
+        };
+
+        if (offset & 0x03) == Self::TENTHS {
+            self.latch = None;
         }
+        value
     }
 
     /// Write one TOD register. Has side effects: see the CONTRACT in the
@@ -140,7 +139,7 @@ impl Clock {
     }
 
     fn running(&self) -> bool {
-        self.running && !self.stopped
+        !self.stopped
     }
 
     /// One pulse on the TOD input pin, i.e. one power-line cycle
@@ -221,21 +220,24 @@ mod tests {
     //        tenths  : bits 0–3 (BCD 0–9)               mask $0F
     //        seconds : bits 0–6 (BCD 00–59)             mask $7F
     //        minutes : bits 0–6 (BCD 00–59)             mask $7F
-    //        hours   : bit 7 = AM/PM (1 = PM), bits 0–5 = BCD hours 01–12
+    //        hours   : bit 7 = AM/PM (1 = PM), bits 0–4 = BCD hours 01–12
     //                  (bit 6 unimplemented)            mask $9F
     //      Only the hours register carries AM_PM_FLAG.
     //    * Tick behaviour from values outside the valid BCD ranges is NOT
-    //      pinned (real hardware is chaotic there). Hours $00 is the
-    //      documented post-/RES state and IS pinned.
+    //      pinned (real hardware is chaotic there). The post-/RES state
+    //      (hours $01, stopped) IS pinned — see 5.
     //
     // 2. MODE (CRB bit 7)
-    //    * Clock : read/write address the live clock (via the latch, 3).
-    //      Alarm : read/write address the alarm registers.
+    //    * Clock : reads and writes address the live clock (via the
+    //      latch, 3).
+    //    * Alarm : WRITES address the alarm registers. Reads are
+    //      mode-independent — the alarm is write-only, so any read of
+    //      a TOD address reads time regardless of CRB7.
     //    * set_mode is bookkeeping only: it never starts or stops the
     //      clock and never touches registers, latch, divider or a pending
     //      alarm. The clock keeps ticking in either mode.
     //
-    // 3. READS IN CLOCK MODE — THE LATCH
+    // 3. READS — THE LATCH (mode-independent)
     //    * Unlatched: reads of tenths/seconds/minutes return live values;
     //      a read of HOURS latches (snapshots) all four registers.
     //    * Latched: every read returns the snapshot; no read refreshes it
@@ -244,9 +246,10 @@ mod tests {
     //    * The clock keeps running while latched; after release, reads are
     //      live again and may jump ahead.
     //    * Writes and mode switches never set or clear the latch; a latch
-    //      taken in Clock mode survives a trip through Alarm mode.
-    //    * Reads in Alarm mode return the alarm registers directly and
-    //      never touch the latch.
+    //      survives a trip through Alarm mode as long as nothing is read
+    //      there (reads operate the latch in either mode).
+    //    * Reads in Alarm mode read the clock and latch/release exactly
+    //      like Clock-mode reads.
     //
     // 4. WRITES IN CLOCK MODE — STOP / RESTART
     //    * A write to HOURS stores the masked value and STOPS the clock
@@ -273,9 +276,10 @@ mod tests {
     //      register. The divider phase across a frequency change is
     //      deliberately NOT pinned; tests around a change use whole
     //      multiples of the new ratio.
-    //    * new(): registers and alarm all $00, mode Clock, F50, running,
-    //      divider 0, no pending alarm. /RES does not stop the TOD — only
-    //      a Clock-mode HOURS write does.
+    //    * new(): clock stopped at hours $01 (rest zero), alarm all $00,
+    //      mode Clock, F50, divider 0, no pending alarm. /RES halts the
+    //      TOD at 1:00:00.0 AM; a Clock-mode TENTHS write restarts it,
+    //      exactly as after any other stop.
     //
     // 6. ALARM
     //    * alarm_pending is set when a tick advances the clock ONTO
@@ -291,7 +295,7 @@ mod tests {
     // is pinned by exactly one or two tests, so flip the CONTRACT line
     // and those tests if your reference says otherwise:
     //    (a) 5/6 cycles per tenth at F50/F60          (real time on both)
-    //    (b) new(): F50, running                       (reset state)
+    //    (b) new(): F50, stopped, hours $01            (reset state)
     //    (c) a tenths write resynchronises the divider
     //    (d) Alarm-mode writes never touch the run state
     //    (e) the AM/PM bit takes part in the alarm comparison
@@ -344,17 +348,6 @@ mod tests {
         (hours, minutes, seconds, tenths)
     }
 
-    /// Read the alarm registers (order irrelevant — alarm reads never latch).
-    fn read_alarm(c: &mut Clock) -> (u8, u8, u8, u8) {
-        c.set_mode(ClockMode::Alarm);
-        let hours = c.read(Clock::HOURS);
-        let minutes = c.read(Clock::MINUTES);
-        let seconds = c.read(Clock::SECONDS);
-        let tenths = c.read(Clock::TENTHS);
-        c.set_mode(ClockMode::Clock);
-        (hours, minutes, seconds, tenths)
-    }
-
     /// Advance the clock by `tenths` tenths of a second at the CURRENT
     /// frequency (tenths × ratio power-line cycles).
     fn tick_tenths(c: &mut Clock, tenths: u32) {
@@ -372,21 +365,19 @@ mod tests {
     // ---------------------------------------------------------------------
 
     #[test]
-    fn new_clock_is_running_in_clock_mode_at_50_hz_and_zeroed() {
-        // /RES clears every register (hours $00 is the power-on state) and
-        // does NOT stop the TOD — only a Clock-mode hours write can stop it.
+    fn new_clock_is_stopped_at_one_oclock_in_clock_mode_at_50_hz() {
+        // /RES halts the TOD at 1:00:00.0 AM with everything else zeroed;
+        // only a Clock-mode tenths write can restart it.
         let mut c = Clock::new();
-        assert!(c.running());
+        assert!(!c.running());
         assert_eq!(c.mode(), ClockMode::Clock);
         assert_eq!(c.frequency(), Frequency::F50);
         assert!(!c.alarm_pending());
-        assert_eq!(read_time(&mut c), (0x00, 0x00, 0x00, 0x00));
-    }
+        assert_eq!(read_time(&mut c), (0x01, 0x00, 0x00, 0x00));
 
-    #[test]
-    fn the_alarm_registers_reset_to_zero_too() {
-        let mut c = Clock::new();
-        assert_eq!(read_alarm(&mut c), (0x00, 0x00, 0x00, 0x00));
+        // and it stays frozen until nudged:
+        tick_tenths(&mut c, 50);
+        assert_eq!(read_time(&mut c), (0x01, 0x00, 0x00, 0x00));
     }
 
     // ---------------------------------------------------------------------
@@ -451,24 +442,20 @@ mod tests {
 
     #[test]
     fn the_alarm_registers_use_the_same_masks() {
+        // The alarm is write-only now, so pin its masks functionally:
+        // junk in the unimplemented bits must neither break nor shift
+        // the match.
         let mut c = Clock::new();
-        set_time(&mut c, 2, 0, 0, 0); // running
         c.set_mode(ClockMode::Alarm);
-        c.write(Clock::TENTHS, 0xFF);
-        c.write(Clock::SECONDS, 0xFF);
-        c.write(Clock::MINUTES, 0xFF);
-        c.write(Clock::HOURS, 0xFF);
-        assert_eq!(c.read(Clock::TENTHS), 0x0F);
-        assert_eq!(c.read(Clock::SECONDS), 0x7F);
-        assert_eq!(c.read(Clock::MINUTES), 0x7F);
-        assert_eq!(c.read(Clock::HOURS), 0x9F);
-        assert!(c.running(), "alarm writes must not stop the clock");
+        c.write(Clock::TENTHS, 0xF7); // bits 4–7 ignored -> $07
+        c.write(Clock::SECONDS, 0xD6); // bit 7 ignored    -> $56
+        c.write(Clock::MINUTES, 0xB4); // bit 7 ignored    -> $34
+        c.write(Clock::HOURS, 0x45); // bit 6 ignored    -> $05
         c.set_mode(ClockMode::Clock);
-        assert_eq!(
-            read_time(&mut c),
-            (0x02, 0x00, 0x00, 0x00),
-            "clock untouched"
-        );
+        set_time(&mut c, 5, 0x34, 0x56, 6); // running, one tenth short
+        assert!(!c.alarm_pending());
+        tick_tenths(&mut c, 1); // -> 5:34:56.7 = the masked alarm
+        assert!(c.alarm_pending());
     }
 
     // ---------------------------------------------------------------------
@@ -508,17 +495,27 @@ mod tests {
     }
 
     #[test]
-    fn clock_mode_reads_the_clock_alarm_mode_reads_the_alarm() {
+    fn reads_return_the_clock_in_both_modes() {
+        // "The ALARM is write-only; any read of a TOD address will read
+        // time regardless of the state of the ALARM access bit."
         let mut c = Clock::new();
         set_time(&mut c, 0x0A, 0x11, 0x22, 0x03); // clock: 10:11:22.3 AM
         set_alarm(&mut c, 0x81, 0x44, 0x55, 0x06); // alarm:  1:44:55.6 PM
+        c.set_mode(ClockMode::Alarm);
+        assert_eq!(c.read(Clock::HOURS), 0x0A, "time, not the alarm");
+        assert_eq!(c.read(Clock::MINUTES), 0x11);
+        assert_eq!(c.read(Clock::SECONDS), 0x22);
+        assert_eq!(c.read(Clock::TENTHS), 0x03); // (releases the latch too)
+        c.set_mode(ClockMode::Clock);
         assert_eq!(read_time(&mut c), (0x0A, 0x11, 0x22, 0x03));
-        assert_eq!(read_alarm(&mut c), (0x81, 0x44, 0x55, 0x06));
 
-        // clock writes never leak into the alarm:
-        set_time(&mut c, 0x0B, 0, 0, 0);
-        assert_eq!(read_alarm(&mut c), (0x81, 0x44, 0x55, 0x06));
-        assert_eq!(read_time(&mut c), (0x0B, 0x00, 0x00, 0x00));
+        // clock writes never leak into the alarm — pinned functionally
+        // now that the alarm can't be read back: after overwriting the
+        // whole clock, the alarm still fires at its original time.
+        set_time(&mut c, 0x11, 0x59, 0x59, 9); // 11:59:59.9 AM
+        tick_tenths(&mut c, 62_957); // -> exactly 1:44:55.6 PM
+        assert_eq!(read_time(&mut c), (0x81, 0x44, 0x55, 0x06));
+        assert!(c.alarm_pending());
     }
 
     // ---------------------------------------------------------------------
@@ -599,16 +596,11 @@ mod tests {
     fn the_latch_survives_a_mode_switch() {
         let mut c = Clock::new();
         set_time(&mut c, 6, 0x30, 0x15, 4); // 6:30:15.4, running
-        set_alarm(&mut c, 9, 0, 0, 7);
         c.read(Clock::HOURS); // latch = 6:30:15.4
 
         c.set_mode(ClockMode::Alarm);
-        assert_eq!(
-            c.read(Clock::TENTHS),
-            0x07,
-            "alarm tenths — must not release the clock latch"
-        );
         c.set_mode(ClockMode::Clock);
+        // (no reads while in Alarm mode: the latch must survive untouched)
         tick_tenths(&mut c, 2); // 6:30:15.6
         assert_eq!(
             c.read(Clock::SECONDS),
@@ -620,16 +612,23 @@ mod tests {
     }
 
     #[test]
-    fn alarm_mode_reads_never_latch() {
+    fn alarm_mode_reads_read_the_clock_and_operate_the_latch() {
+        // Reads are mode-independent: they return time (never the
+        // write-only alarm) and latch/release exactly as in Clock mode.
         let mut c = Clock::new();
         set_time(&mut c, 2, 0, 0, 0); // running
-        read_alarm(&mut c); // reads the alarm HOURS etc. — must not latch
-        tick_tenths(&mut c, 2);
+        set_alarm(&mut c, 9, 0, 0, 0);
+        c.set_mode(ClockMode::Alarm);
         assert_eq!(
-            c.read(Clock::TENTHS),
+            c.read(Clock::HOURS),
             0x02,
-            "no latch was taken: reads stay live"
+            "the clock's 2, not the alarm's 9"
         );
+        tick_tenths(&mut c, 2);
+        assert_eq!(c.read(Clock::SECONDS), 0x00, "latched at 2:00:00.0");
+        assert_eq!(c.read(Clock::TENTHS), 0x00); // snapshot — releases
+        assert_eq!(c.read(Clock::TENTHS), 0x02, "live again");
+        c.set_mode(ClockMode::Clock);
     }
 
     #[test]
@@ -796,7 +795,8 @@ mod tests {
 
     #[test]
     fn at_50_hz_five_input_cycles_advance_one_tenth() {
-        let mut c = Clock::new(); // divider starts at 0
+        let mut c = Clock::new(); // stopped after /RES
+        c.write(Clock::TENTHS, 0x00); // nudge: divider 0, running
         for _ in 0..4 {
             c.tick();
         }
@@ -808,6 +808,7 @@ mod tests {
     #[test]
     fn at_60_hz_six_input_cycles_advance_one_tenth() {
         let mut c = Clock::new();
+        c.write(Clock::TENTHS, 0x00); // nudge the /RES-stopped clock
         c.set_frequency(Frequency::F60);
         for _ in 0..5 {
             c.tick();
@@ -891,10 +892,16 @@ mod tests {
     }
 
     #[test]
-    fn the_power_on_hour_zero_ticks_up_to_one() {
-        let mut c = Clock::new(); // 0:00:00.0
-        tick_tenths(&mut c, 3_600 * 10); // one hour
+    fn a_bare_tenths_write_nudges_the_reset_clock_into_action() {
+        // "It is permissible to write to only the 10ths register to
+        // 'nudge' the clock into action, in which case, following a
+        // hardware reset, the clock will start at 1:00:00.0."
+        let mut c = Clock::new();
+        c.write(Clock::TENTHS, 0x00);
+        assert!(c.running());
         assert_eq!(read_time(&mut c), (0x01, 0x00, 0x00, 0x00));
+        tick_tenths(&mut c, 3_600 * 10); // one hour
+        assert_eq!(read_time(&mut c), (0x02, 0x00, 0x00, 0x00));
     }
 
     #[test]
@@ -927,7 +934,8 @@ mod tests {
 
     #[test]
     fn both_mains_frequencies_keep_a_real_second() {
-        let mut c = Clock::new(); // F50, 0:00:00.0
+        let mut c = Clock::new(); // F50, 1:00:00.0, stopped
+        c.write(Clock::TENTHS, 0x00); // nudge
         for _ in 0..50 {
             c.tick(); // 50 power cycles = 1 s at 50 Hz
         }
@@ -970,10 +978,11 @@ mod tests {
 
     #[test]
     fn a_clock_mode_tenths_write_resynchronises_the_divider() {
-        let mut c = Clock::new(); // F50, divider 0
+        let mut c = Clock::new(); // F50, divider 0, stopped
+        c.write(Clock::TENTHS, 0x00); // start it
         c.tick();
         c.tick(); // divider = 2, tenths still 0
-        c.write(Clock::TENTHS, 0x00); // running already; divider := 0
+        c.write(Clock::TENTHS, 0x00); // resynchronises: divider := 0
         for _ in 0..3 {
             c.tick();
         }
@@ -1131,14 +1140,16 @@ mod tests {
 
     #[test]
     fn the_default_zero_alarm_never_fires() {
-        // Hour $00 occurs only in the power-on state, and no tick ever
-        // ARRIVES at 0:00:00.0 — hours count 0 -> 1 -> ... -> 12 -> 1 ...
-        let mut c = Clock::new(); // clock AND alarm 0:00:00.0
+        // Hour $00 occurs only while the clock is /RES-frozen, before
+        // the first nudge; once running, hours count 1 -> ... -> 12 -> 1
+        // ... so no tick ever ARRIVES at 0:00:00.0.
+        let mut c = Clock::new(); // clock 1:00:00.0 stopped, alarm 0:00:00.0
+        c.write(Clock::TENTHS, 0x00); // nudge: 1:00:00.0 AM, running
         tick_tenths(&mut c, 43_200 * 10); // a full 12 hours
         assert_eq!(
             read_time(&mut c),
-            (0x92, 0x00, 0x00, 0x00),
-            "0:00 AM + 12h = 12:00 PM"
+            (0x81, 0x00, 0x00, 0x00),
+            "1:00 AM + 12h = 1:00 PM"
         );
         assert!(!c.alarm_pending());
     }
