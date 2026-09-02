@@ -110,7 +110,11 @@ timers into a 32-bit counter.
 Each data port bit can be independently configured as input or output
 via the DDR. When a bit is set as output, the value written to the
 data port register appears on the pin. When set as input, the pin's
-external logic level can be read.
+external logic level can be read. **Important hardware behavior:** Port lines
+use open-collector drivers with pull-ups. Reading the port register reflects
+the actual physical voltage on the pins `(latch | !ddr) & pins` for both
+input and output bits. External ground pulls (e.g. Joystick 2 on Port A)
+pull output lines low.
 
 **Port B special feature:** Timer A can output to bit 6 of Port B, and
 Timer B can output to bit 7 of Port B, overriding the normal data port

@@ -56,10 +56,7 @@ impl Clock {
     fn new() -> Self {
         Self {
             alarm: Registers::default(),
-            registers: Registers {
-                hours: 0x01,
-                ..Default::default()
-            },
+            registers: Registers::default(),
             latch: None,
             mode: ClockMode::Clock,
             frequency: Frequency::F50,
@@ -365,7 +362,7 @@ mod tests {
     // ---------------------------------------------------------------------
 
     #[test]
-    fn new_clock_is_stopped_at_one_oclock_in_clock_mode_at_50_hz() {
+    fn new_clock_is_stopped_at_zero_in_clock_mode_at_50_hz() {
         // /RES halts the TOD at 1:00:00.0 AM with everything else zeroed;
         // only a Clock-mode tenths write can restart it.
         let mut c = Clock::new();
@@ -373,11 +370,11 @@ mod tests {
         assert_eq!(c.mode(), ClockMode::Clock);
         assert_eq!(c.frequency(), Frequency::F50);
         assert!(!c.alarm_pending());
-        assert_eq!(read_time(&mut c), (0x01, 0x00, 0x00, 0x00));
+        assert_eq!(read_time(&mut c), (0x00, 0x00, 0x00, 0x00));
 
         // and it stays frozen until nudged:
         tick_tenths(&mut c, 50);
-        assert_eq!(read_time(&mut c), (0x01, 0x00, 0x00, 0x00));
+        assert_eq!(read_time(&mut c), (0x00, 0x00, 0x00, 0x00));
     }
 
     // ---------------------------------------------------------------------
@@ -899,9 +896,9 @@ mod tests {
         let mut c = Clock::new();
         c.write(Clock::TENTHS, 0x00);
         assert!(c.running());
-        assert_eq!(read_time(&mut c), (0x01, 0x00, 0x00, 0x00));
+        assert_eq!(read_time(&mut c), (0x00, 0x00, 0x00, 0x00));
         tick_tenths(&mut c, 3_600 * 10); // one hour
-        assert_eq!(read_time(&mut c), (0x02, 0x00, 0x00, 0x00));
+        assert_eq!(read_time(&mut c), (0x01, 0x00, 0x00, 0x00));
     }
 
     #[test]
@@ -1143,7 +1140,8 @@ mod tests {
         // Hour $00 occurs only while the clock is /RES-frozen, before
         // the first nudge; once running, hours count 1 -> ... -> 12 -> 1
         // ... so no tick ever ARRIVES at 0:00:00.0.
-        let mut c = Clock::new(); // clock 1:00:00.0 stopped, alarm 0:00:00.0
+        let mut c = Clock::new();
+        c.write(Clock::HOURS, 0x01); // clock 1:00:00.0 stopped, alarm 0:00:00.0
         c.write(Clock::TENTHS, 0x00); // nudge: 1:00:00.0 AM, running
         tick_tenths(&mut c, 43_200 * 10); // a full 12 hours
         assert_eq!(

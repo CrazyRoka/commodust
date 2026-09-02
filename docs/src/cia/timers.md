@@ -24,7 +24,7 @@ counter. The latch is copied to the counter when:
 - The timer is started (bit 0 of control register set to 1) and the counter
   has not yet been loaded, or
 - The force load strobe (bit 4 of control register) is set to 1, or
-- The counter reaches zero and reloads (in continuous mode).
+- The counter underflows (reloads in both continuous and one-shot modes; in one-shot mode it reloads and stops).
 
 ### Reading
 
@@ -49,9 +49,9 @@ clock cycle. When the counter reaches zero:
 1. The corresponding ICR bit (bit 0 for Timer A, bit 1 for Timer B) is set.
 2. If the interrupt is enabled in the ICR mask, an interrupt (IRQ for CIA #1,
    NMI for CIA #2) is generated.
-3. The latch value is reloaded into the counter.
+3. The latch value is reloaded into the counter in both modes.
 4. In **one-shot mode** (bit 3 of control register = 1): the timer stops
-   (bit 0 cleared). In **continuous mode** (bit 3 = 0): counting resumes.
+   (bit 0 cleared) leaving the reloaded latch in the counter. In **continuous mode** (bit 3 = 0): counting resumes.
 
 ## Control Register A ($0E) — Timer A Control
 

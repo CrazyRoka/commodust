@@ -28,11 +28,11 @@ struct Timer {
 
 impl Timer {
     /// State after /RES: CRA/CRB cleared (stopped, continuous),
-    /// timer registers read $0000.
+    /// timer latches and counters initialized to $FFFF.
     fn new() -> Self {
         Self {
-            counter: 0,
-            latch: 0,
+            counter: 0xFFFF,
+            latch: 0xFFFF,
             running: false,
             mode: TimerMode::Continuous,
             underflow_pending: false,
@@ -98,7 +98,6 @@ impl Timer {
                 self.underflow_pending = true;
                 if self.mode == TimerMode::OneShot {
                     self.running = false;
-                    self.counter = 0xFFFF;
                 }
             } else {
                 self.counter -= 1;
@@ -170,9 +169,8 @@ mod tests {
     //      else                          -> UNDERFLOW (the clock that decrements
     //                                        FROM $0000):
     //                                        - set the pending-event flag
-    //                                        - Continuous : counter := latch
-    //                                        - OneShot    : counter := $FFFF,
-    //                                                       running := false
+    //                                        - counter := latch (both Continuous and OneShot)
+    //                                        - OneShot    : running := false
     //
     // 5. EVENT
     //    * Set only by an underflow; cleared only by acknowledge_underflow().
@@ -218,15 +216,15 @@ mod tests {
     // ---------------------------------------------------------------------
 
     #[test]
-    fn new_timer_is_stopped_continuous_and_zeroed() {
+    fn new_timer_is_stopped_continuous_and_ffff() {
         // 6526 after /RES: CRA/CRB = 0 -> start bit clear (stopped),
         // run-mode bit clear (continuous); timer registers read $0000.
         let t = Timer::new();
         assert!(!t.is_running());
         assert_eq!(t.mode(), TimerMode::Continuous);
-        assert_eq!(t.read_low(), 0x00);
-        assert_eq!(t.read_high(), 0x00);
-        assert_eq!(t.latch(), 0x0000);
+        assert_eq!(t.read_low(), 0xFF);
+        assert_eq!(t.read_high(), 0xFF);
+        assert_eq!(t.latch(), 0xFFFF);
         assert!(!t.underflow());
     }
 
@@ -457,7 +455,7 @@ mod tests {
         t.start(); // resumed: the very next clock underflows
         t.tick();
         assert!(t.underflow());
-        assert_eq!(read_counter(&t), 0xFFFF);
+        assert_eq!(read_counter(&t), 1); // reloads latch value
     }
 
     #[test]
@@ -516,19 +514,19 @@ mod tests {
     }
 
     #[test]
-    fn restarting_an_expired_one_shot_counts_down_from_ffff() {
+    fn restarting_an_expired_one_shot_counts_down_from_reloaded_latch() {
         // Hence a restarted expired one-shot waits a full 65536 clocks.
         let mut t = expired_one_shot(2);
         assert!(!t.is_running());
-        assert_eq!(read_counter(&t), 0xFFFF);
+        assert_eq!(read_counter(&t), 2);
         t.acknowledge_underflow();
         t.start();
         assert!(t.is_running());
-        assert_eq!(read_counter(&t), 0xFFFF, "restart must not reload");
+        assert_eq!(read_counter(&t), 2, "restart resumes from reloaded count");
         t.tick();
-        assert_eq!(read_counter(&t), 0xFFFE);
+        assert_eq!(read_counter(&t), 1);
         t.tick();
-        assert_eq!(read_counter(&t), 0xFFFD);
+        assert_eq!(read_counter(&t), 0);
     }
 
     #[test]
@@ -612,7 +610,7 @@ mod tests {
         let mut t = timer_with(3);
         t.set_mode(TimerMode::OneShot);
         t.start();
-        for &expected in &[2u16, 1, 0, 0xFFFF] {
+        for &expected in &[2u16, 1, 0, 3] {
             t.tick();
             assert_eq!(read_counter(&t), expected);
         }
@@ -621,13 +619,13 @@ mod tests {
     }
 
     #[test]
-    fn one_shot_expires_with_the_counter_at_ffff() {
+    fn one_shot_expires_with_the_counter_reloaded_from_latch() {
         let t = expired_one_shot(3);
         assert!(!t.is_running());
         assert_eq!(
             read_counter(&t),
-            0xFFFF,
-            "an expired one-shot leaves $FFFF in the counter"
+            3,
+            "an expired one-shot reloads the latch into the counter"
         );
         assert_eq!(t.latch(), 3, "expiry must not clobber the latch");
     }
@@ -644,7 +642,7 @@ mod tests {
             "an expired one-shot must not underflow again"
         );
         assert!(!t.is_running());
-        assert_eq!(read_counter(&t), 0xFFFF);
+        assert_eq!(read_counter(&t), 3);
     }
 
     #[test]
@@ -657,7 +655,7 @@ mod tests {
         t.tick();
         assert!(t.underflow());
         assert!(!t.is_running());
-        assert_eq!(read_counter(&t), 0xFFFF);
+        assert_eq!(read_counter(&t), 0);
     }
 
     #[test]
@@ -734,7 +732,7 @@ mod tests {
     #[test]
     fn rearming_an_expired_one_shot_by_rewriting_the_high_byte() {
         let mut t = expired_one_shot(5);
-        assert_eq!(read_counter(&t), 0xFFFF);
+        assert_eq!(read_counter(&t), 5);
         t.write_low(9);
         t.write_high(0); // stopped -> force load
         assert_eq!(read_counter(&t), 9);
@@ -782,7 +780,7 @@ mod tests {
         t.tick(); // underflow — now one-shot, so it stops
         assert!(!t.is_running());
         assert!(t.underflow());
-        assert_eq!(read_counter(&t), 0xFFFF);
+        assert_eq!(read_counter(&t), 4);
     }
 
     #[test]
@@ -801,19 +799,15 @@ mod tests {
     }
 
     #[test]
-    fn expired_one_shot_revived_as_continuous_counts_from_ffff() {
+    fn expired_one_shot_revived_as_continuous_counts_from_reloaded_latch() {
         let mut t = expired_one_shot(5);
         t.set_mode(TimerMode::Continuous);
         assert!(!t.is_running(), "a mode change must not start the timer");
         t.start();
         t.tick();
-        assert_eq!(
-            read_counter(&t),
-            0xFFFE,
-            "restarts from the expired $FFFF value"
-        );
+        assert_eq!(read_counter(&t), 4, "restarts from the reloaded count");
         t.tick();
-        assert_eq!(read_counter(&t), 0xFFFD);
+        assert_eq!(read_counter(&t), 3);
     }
 
     // ---------------------------------------------------------------------
