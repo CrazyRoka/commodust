@@ -65,7 +65,7 @@ pub struct ComplexInterfaceAdapter {
 }
 
 impl ComplexInterfaceAdapter {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             port_a: Port::new(),
             port_b: Port::new(),
@@ -82,7 +82,7 @@ impl ComplexInterfaceAdapter {
         }
     }
 
-    fn read(&mut self, offset: u8) -> u8 {
+    pub fn read(&mut self, offset: u8) -> u8 {
         match offset & 0x0F {
             PRA => self.port_a.read_pins(),
             PRB => self.port_b.read_pins(),
@@ -101,7 +101,7 @@ impl ComplexInterfaceAdapter {
         }
     }
 
-    fn write(&mut self, offset: u8, value: u8) {
+    pub fn write(&mut self, offset: u8, value: u8) {
         match offset & 0x0F {
             PRA => self.port_a.write_latch(value),
             PRB => self.port_b.write_latch(value),
@@ -184,7 +184,7 @@ impl ComplexInterfaceAdapter {
 
     /// One φ2 cycle: timers (per their clock source), serial shifter,
     /// PB6/PB7 output flip-flops, ICR event latching — in that order.
-    fn tick(&mut self) {
+    pub fn tick(&mut self) {
         if self.control_register_a & (CR_OUTPUT | CR_TOGGLE) == CR_OUTPUT {
             self.port_b_override_value &= !(1 << 6);
         }
@@ -264,12 +264,12 @@ impl ComplexInterfaceAdapter {
     }
 
     /// Interrupt line level (wired to IRQ for CIA #1, NMI for CIA #2).
-    fn irq(&self) -> bool {
+    pub fn irq(&self) -> bool {
         self.interrupt_control_register.is_interrupt_active()
     }
 
     /// /RES: every component back to its power-on state.
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         *self = Self::new();
     }
 

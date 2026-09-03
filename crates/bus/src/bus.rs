@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+
+use cia::ComplexInterfaceAdapter;
+
 const COLOR_RAM_SIZE: usize = 0x0400; // 1024 bytes (1K × 4-bit)
 
 const BASIC_ROM_OFFSET: usize = 0x0000; // 8K — maps to CPU $A000–$BFFF
@@ -29,8 +33,11 @@ pub struct Bus {
     rom: [u8; ROM_SIZE],
     data_direction_register: u8,
     data_port: u8,
+    cia1: RefCell<ComplexInterfaceAdapter>,
+    cia2: RefCell<ComplexInterfaceAdapter>,
 }
 
+// TODO: call tod_pulse in CIA!
 impl Bus {
     pub fn new(rom: &[u8]) -> Self {
         assert_eq!(
@@ -47,14 +54,25 @@ impl Bus {
             rom: new_rom,
             data_direction_register: 0b11101111,
             data_port: 0b00110111,
+            cia1: RefCell::new(ComplexInterfaceAdapter::new()),
+            cia2: RefCell::new(ComplexInterfaceAdapter::new()),
         }
+    }
+
+    fn is_io_mapped(&self) -> bool {
+        (self.data_port & CHAREN != 0) && (self.data_port & (LORAM | HIRAM) != 0)
     }
 
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000 => self.data_direction_register = value,
             0x0001 => self.data_port = value,
-            _ => self.ram[addr as usize] = value,
+            _ => {
+                self.ram[addr as usize] = value;
+                if self.is_io_mapped() {
+                    self.write_io(addr, value);
+                }
+            }
         }
     }
 
@@ -65,11 +83,7 @@ impl Bus {
             0xA000..=0xBFFF if self.data_port & LORAM != 0 => {
                 self.rom[addr as usize - 0xA000 + BASIC_ROM_OFFSET]
             }
-            0xD000..=0xDFFF
-                if (self.data_port & CHAREN != 0) && (self.data_port & (LORAM | HIRAM) != 0) =>
-            {
-                self.read_io(addr)
-            }
+            0xD000..=0xDFFF if self.is_io_mapped() => self.read_io(addr),
             0xD000..=0xDFFF if self.data_port & (LORAM | HIRAM) != 0 => {
                 self.rom[addr as usize - 0xD000 + CHAR_ROM_OFFSET]
             }
@@ -81,7 +95,35 @@ impl Bus {
     }
 
     fn read_io(&self, addr: u16) -> u8 {
-        0xFF
+        match addr {
+            0xDC00..=0xDCFF => self.cia1.borrow_mut().read((addr & 0x0F) as u8),
+            0xDD00..=0xDDFF => self.cia2.borrow_mut().read((addr & 0x0F) as u8),
+            _ => 0xFF,
+        }
+    }
+
+    fn write_io(&mut self, addr: u16, value: u8) {
+        match addr {
+            0xDC00..=0xDCFF => self.cia1.borrow_mut().write((addr & 0x0F) as u8, value),
+            0xDD00..=0xDDFF => self.cia2.borrow_mut().write((addr & 0x0F) as u8, value),
+            _ => {}
+        }
+    }
+
+    /// Advances both CIAs by one φ2 clock cycle.
+    pub fn tick(&mut self) {
+        self.cia1.borrow_mut().tick();
+        self.cia2.borrow_mut().tick();
+    }
+
+    /// True if CIA #1 is asserting IRQ.
+    pub fn irq(&self) -> bool {
+        self.cia1.borrow().irq()
+    }
+
+    /// True if CIA #2 is asserting NMI.
+    pub fn nmi(&self) -> bool {
+        self.cia2.borrow().irq()
     }
 }
 
@@ -813,27 +855,36 @@ mod tests {
     //     assert_eq!(bus.read(0xD7E0), 0xFF); // last mirror
     // }
 
-    // #[test]
-    // fn test_cia1_register_mirror_within_dc00_dcff() {
-    //     // CIA #1 uses only 4 address bits → mirror every 16 bytes
-    //     let bus = make_test_bus();
+    #[test]
+    fn test_cia1_register_mirror_within_dc00_dcff() {
+        // CIA #1 uses only 4 address bits -> mirrors every 16 bytes
+        let mut bus = make_test_bus();
 
-    //     assert_eq!(bus.read(0xDC00), 0xFF);
-    //     assert_eq!(bus.read(0xDC10), 0xFF); // mirror 1
-    //     assert_eq!(bus.read(0xDC20), 0xFF); // mirror 2
-    //     assert_eq!(bus.read(0xDCF0), 0xFF); // last mirror
-    // }
+        // Write to Data Direction Register A ($02) via base address $DC02
+        bus.write(0xDC02, 0x5A);
 
-    // #[test]
-    // fn test_cia2_register_mirror_within_dd00_ddff() {
-    //     // CIA #2 uses only 4 address bits → mirror every 16 bytes
-    //     let bus = make_test_bus();
+        // Verify write reads back identically across multiple 16-byte mirrors
+        assert_eq!(bus.read(0xDC02), 0x5A, "base register read failed");
+        assert_eq!(bus.read(0xDC12), 0x5A, "mirror at $DC12 failed");
+        assert_eq!(bus.read(0xDC22), 0x5A, "mirror at $DC22 failed");
+        assert_eq!(bus.read(0xDC82), 0x5A, "mirror at $DC82 failed");
+        assert_eq!(bus.read(0xDCF2), 0x5A, "mirror at $DCF2 failed");
+    }
 
-    //     assert_eq!(bus.read(0xDD00), 0xFF);
-    //     assert_eq!(bus.read(0xDD10), 0xFF); // mirror 1
-    //     assert_eq!(bus.read(0xDD20), 0xFF); // mirror 2
-    //     assert_eq!(bus.read(0xDDF0), 0xFF); // last mirror
-    // }
+    #[test]
+    fn test_cia2_register_mirror_within_dd00_ddff() {
+        // CIA #2 uses only 4 address bits -> mirrors every 16 bytes
+        let mut bus = make_test_bus();
+
+        // Write to Data Direction Register B ($03) via mirror $DD23
+        bus.write(0xDD23, 0xA5);
+
+        // Verify across mirrors including base address
+        assert_eq!(bus.read(0xDD03), 0xA5, "base register read failed");
+        assert_eq!(bus.read(0xDD13), 0xA5, "mirror at $DD13 failed");
+        assert_eq!(bus.read(0xDD33), 0xA5, "mirror at $DD33 failed");
+        assert_eq!(bus.read(0xDDF3), 0xA5, "mirror at $DDF3 failed");
+    }
 
     // // ─── Open Bus Tests ────────────────────────────────────────
 
@@ -1181,4 +1232,180 @@ mod tests {
     //         );
     //     }
     // }
+
+    #[test]
+    fn test_cia_chips_are_isolated_from_each_other() {
+        let mut bus = make_test_bus();
+
+        // Program Timer A latches on CIA 1 and CIA 2 to different values
+        // CIA 1: TA_LO ($DC04) = $34, TA_HI ($DC05) = $12 -> $1234
+        bus.write(0xDC04, 0x34);
+        bus.write(0xDC05, 0x12);
+
+        // CIA 2: TA_LO ($DD04) = $78, TA_HI ($DD05) = $56 -> $5678
+        bus.write(0xDD04, 0x78);
+        bus.write(0xDD05, 0x56);
+
+        assert_eq!(bus.read(0xDC04), 0x34);
+        assert_eq!(bus.read(0xDC05), 0x12);
+        assert_eq!(bus.read(0xDD04), 0x78);
+        assert_eq!(bus.read(0xDD05), 0x56);
+    }
+
+    #[test]
+    fn test_cia_inaccessible_when_char_rom_mapped() {
+        let mut bus = make_test_bus();
+
+        // Program CIA 1 DDRA while I/O is enabled
+        bus.write(0xDC02, 0x55);
+        assert_eq!(bus.read(0xDC02), 0x55);
+
+        // Bank in Character ROM (CHAREN = 0)
+        set_banking(&mut bus, true, true, false);
+
+        // Address $DC02 should now return Character ROM data, NOT CIA 1
+        let expected_char_rom = ((0x0C02usize & 0xFF) as u8) ^ 0xD0;
+        assert_eq!(bus.read(0xDC02), expected_char_rom);
+
+        // Restore I/O (CHAREN = 1) -> CIA 1 register reappears intact
+        set_banking(&mut bus, true, true, true);
+        assert_eq!(bus.read(0xDC02), 0x55);
+    }
+
+    #[test]
+    fn test_cia_inaccessible_when_all_ram_mapped() {
+        let mut bus = make_test_bus();
+
+        // Program CIA 2 DDRB while I/O is enabled
+        bus.write(0xDD03, 0xAA);
+        assert_eq!(bus.read(0xDD03), 0xAA);
+
+        // Bank in all-RAM mode (LORAM = 0, HIRAM = 0)
+        set_banking(&mut bus, false, false, true);
+
+        // Reads from $DD03 now read underlying RAM, not CIA 2
+        // (RAM was written with 0xAA via write-through during bus.write above)
+        assert_eq!(bus.read(0xDD03), 0xAA);
+
+        // Overwrite RAM at $DD03 while in RAM mode
+        bus.write(0xDD03, 0x33);
+        assert_eq!(bus.read(0xDD03), 0x33);
+
+        // Switch back to I/O mode: CIA 2 should still retain 0xAA
+        set_banking(&mut bus, true, true, true);
+        assert_eq!(bus.read(0xDD03), 0xAA);
+    }
+
+    #[test]
+    fn test_write_through_to_ram_under_cia() {
+        let mut bus = make_test_bus();
+
+        // Write to a CIA 1 register location with I/O active
+        bus.write(0xDC04, 0x7E);
+
+        // Switch to all-RAM mode: verify RAM received the write
+        set_banking(&mut bus, false, false, true);
+        assert_eq!(bus.read(0xDC04), 0x7E);
+    }
+
+    #[test]
+    fn test_writes_when_io_disabled_do_not_affect_cia() {
+        let mut bus = make_test_bus();
+
+        // Switch to Character ROM mode (I/O disabled)
+        set_banking(&mut bus, true, true, false);
+
+        // Write to $DC02 (CIA 1 DDRA address)
+        bus.write(0xDC02, 0xFF);
+
+        // Switch back to I/O mode
+        set_banking(&mut bus, true, true, true);
+
+        // CIA 1 DDRA must still be at its reset default (0x00), unaffected by the write
+        assert_eq!(bus.read(0xDC02), 0x00);
+    }
+
+    #[test]
+    fn test_io_boundaries_around_cias() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true);
+
+        // $DBFF is Color RAM boundary (reads 0xFF while Color RAM unconnected)
+        assert_eq!(bus.read(0xDBFF), 0xFF);
+
+        // $DC00 is CIA 1 PRA (unconnected input pins read 0xFF)
+        assert_eq!(bus.read(0xDC00), 0xFF);
+
+        // $DCFF is last byte of CIA 1 mirror (CRB, reset value is 0x00)
+        assert_eq!(bus.read(0xDCFF), 0x00);
+
+        // $DD00 is CIA 2 PRA (unconnected input pins read 0xFF)
+        assert_eq!(bus.read(0xDD00), 0xFF);
+
+        // $DDFF is last byte of CIA 2 mirror (CRB, reset value is 0x00)
+        assert_eq!(bus.read(0xDDFF), 0x00);
+
+        // $DE00 is I/O Expansion 1 (unconnected reads return 0xFF)
+        assert_eq!(bus.read(0xDE00), 0xFF);
+    }
+
+    #[test]
+    fn test_cia1_timer_and_irq_propagation_through_bus() {
+        let mut bus = make_test_bus();
+
+        // 1. Enable Timer A interrupt mask (ICR bit 0 with bit 7 set = $81)
+        bus.write(0xDC0D, 0x81);
+
+        // 2. Program Timer A for a 2-cycle period (latch = 1)
+        bus.write(0xDC04, 0x01); // TA_LO
+        bus.write(0xDC05, 0x00); // TA_HI
+
+        // 3. Start Timer A (CRA bit 0 = 1)
+        bus.write(0xDC0E, 0x01);
+
+        assert!(!bus.irq(), "IRQ should not be active before timer expires");
+
+        // Cycle 1: 1 -> 0
+        bus.tick();
+        assert!(!bus.irq());
+
+        // Cycle 2: Underflow! Latches ICR and asserts IRQ line
+        bus.tick();
+        assert!(bus.irq(), "IRQ line must be asserted through the bus");
+
+        // Reading ICR ($DC0D) via bus.read must return IR + Timer A bits and clear on read
+        let icr = bus.read(0xDC0D);
+        assert_eq!(
+            icr, 0x81,
+            "ICR read must return IRQ flag (bit 7) and Timer A flag (bit 0)"
+        );
+
+        // Clear-on-read must de-assert the IRQ line
+        assert!(!bus.irq(), "IRQ line must de-assert after reading ICR");
+    }
+
+    #[test]
+    fn test_cia2_nmi_propagation_through_bus() {
+        let mut bus = make_test_bus();
+
+        // Enable Timer B interrupt mask on CIA #2 ($DD0D)
+        bus.write(0xDD0D, 0x82);
+
+        // Program Timer B for 1-cycle period (latch = 0)
+        bus.write(0xDD06, 0x00);
+        bus.write(0xDD07, 0x00);
+
+        // Start Timer B ($DD0F)
+        bus.write(0xDD0F, 0x01);
+
+        assert!(!bus.nmi());
+
+        // 1 cycle -> underflow
+        bus.tick();
+        assert!(bus.nmi(), "NMI line must be asserted through the bus");
+
+        // Read ICR to acknowledge
+        assert_eq!(bus.read(0xDD0D), 0x82);
+        assert!(!bus.nmi(), "NMI line must de-assert after reading ICR");
+    }
 }

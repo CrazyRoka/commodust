@@ -28,6 +28,13 @@ impl System {
     }
 
     pub fn tick(&mut self) {
+        if self.bus.nmi() {
+            self.cpu.nmi();
+        }
+        if self.bus.irq() {
+            self.cpu.irq();
+        }
+
         let operation = self.cpu.step(self.cpu_data);
         println!("CPU: <{:?}>. Operation: <{:?}>", self.cpu, operation);
 
