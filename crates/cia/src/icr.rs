@@ -1,20 +1,20 @@
-const TIMER_A_UNDERFLOW: u8 = 1 << 0;
-const TIMER_B_UNDERFLOW: u8 = 1 << 1;
-const TOD_ALARM: u8 = 1 << 2;
-const SERIAL_SHIFT_REGISTER: u8 = 1 << 3;
-const FLAG_LINE: u8 = 1 << 4;
+pub const TIMER_A_UNDERFLOW: u8 = 1 << 0;
+pub const TIMER_B_UNDERFLOW: u8 = 1 << 1;
+pub const TOD_ALARM: u8 = 1 << 2;
+pub const SERIAL_SHIFT_REGISTER: u8 = 1 << 3;
+pub const FLAG_LINE: u8 = 1 << 4;
 const IR_FLAG: u8 = 1 << 7;
 const SET_CLEAR_FLAG: u8 = 1 << 7;
 const SOURCE_MASK: u8 = 0x1F;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct InterruptControlRegister {
+pub struct InterruptControlRegister {
     interrupts: u8,
     mask: u8,
 }
 
 impl InterruptControlRegister {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             interrupts: 0,
             mask: 0,

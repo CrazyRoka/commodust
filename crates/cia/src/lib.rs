@@ -1,3 +1,4 @@
+mod cia;
 mod clock;
 mod icr;
 mod port;

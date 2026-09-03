@@ -4,14 +4,14 @@
 ///   underflow and the timer keeps running.
 /// * `OneShot`    — bit 3 = 1: the timer stops after the first underflow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TimerMode {
+pub enum TimerMode {
     OneShot,
     Continuous,
 }
 
 /// One 16-bit interval timer of a MOS 6526 CIA (Timer A or Timer B).
 #[derive(Debug)]
-struct Timer {
+pub struct Timer {
     /// 16-bit down counter. This is what the CPU reads at $DC04/$DC05 (A)
     /// or $DC06/$DC07 (B).
     counter: u16,
@@ -29,7 +29,7 @@ struct Timer {
 impl Timer {
     /// State after /RES: CRA/CRB cleared (stopped, continuous),
     /// timer latches and counters initialized to $FFFF.
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             counter: 0xFFFF,
             latch: 0xFFFF,
@@ -40,17 +40,17 @@ impl Timer {
     }
 
     /// Low byte of the *counter* (never the latch), e.g. $DC04.
-    fn read_low(&self) -> u8 {
+    pub fn read_low(&self) -> u8 {
         (self.counter & 0xFF) as u8
     }
 
     /// High byte of the *counter*, e.g. $DC05.
-    fn read_high(&self) -> u8 {
+    pub fn read_high(&self) -> u8 {
         (self.counter >> 8) as u8
     }
 
     /// Latch low byte ($DC04). Never touches the counter.
-    fn write_low(&mut self, value: u8) {
+    pub fn write_low(&mut self, value: u8) {
         self.latch &= 0xFF00;
         self.latch |= value as u16;
     }
@@ -59,7 +59,7 @@ impl Timer {
     /// this write also copies the updated latch into the counter ("force
     /// load"). While running, only the latch changes; the new value is
     /// used at the next underflow.
-    fn write_high(&mut self, value: u8) {
+    pub fn write_high(&mut self, value: u8) {
         self.latch &= 0x00FF;
         self.latch |= (value as u16) << 8;
 
@@ -69,29 +69,29 @@ impl Timer {
     }
 
     /// CRA/CRB bit 0 := 1. Starts counting. Does **not** reload the counter.
-    fn start(&mut self) {
+    pub fn start(&mut self) {
         self.running = true;
     }
 
     /// CRA/CRB bit 0 := 0. Freezes the counter at its current value.
-    fn stop(&mut self) {
+    pub fn stop(&mut self) {
         self.running = false;
     }
 
     /// CRA/CRB bit 3. Pure bookkeeping: never starts/stops/loads anything.
-    fn set_mode(&mut self, mode: TimerMode) {
+    pub fn set_mode(&mut self, mode: TimerMode) {
         self.mode = mode;
     }
 
     /// CRA/CRB bit 4 strobe ("load latch into the timer once"):
     /// counter := latch, instantly, regardless of running state.
     /// Neither starts nor stops the timer, and is not an underflow.
-    fn reload(&mut self) {
+    pub fn reload(&mut self) {
         self.counter = self.latch;
     }
 
     /// Advance by one φ2 clock. See the CONTRACT comment in the test module.
-    fn tick(&mut self) {
+    pub fn tick(&mut self) {
         if self.running {
             if self.counter == 0 {
                 self.counter = self.latch;
@@ -106,18 +106,18 @@ impl Timer {
     }
 
     /// True if an underflow occurred that has not been acknowledged yet.
-    fn underflow(&self) -> bool {
+    pub fn underflow(&self) -> bool {
         self.underflow_pending
     }
 
     /// Acknowledge (clear) the pending underflow event. (Later: call this
     /// from your ICR read handler.)
-    fn acknowledge_underflow(&mut self) {
+    pub fn acknowledge_underflow(&mut self) {
         self.underflow_pending = false;
     }
 
     /// CRA/CRB bit 0 state.
-    fn is_running(&self) -> bool {
+    pub fn is_running(&self) -> bool {
         self.running
     }
 

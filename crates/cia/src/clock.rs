@@ -13,21 +13,21 @@ struct Registers {
 
 /// Which register bank read/write address — CRB bit 7 of the owning CIA.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClockMode {
+pub enum ClockMode {
     Alarm,
     Clock,
 }
 
 /// Frequency on the TOD input pin (mains-derived: 50 Hz PAL, 60 Hz NTSC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Frequency {
+pub enum Frequency {
     F50,
     F60,
 }
 
 /// Time-of-Day clock of a MOS 6526 CIA ($DC08-$DC0B / $DD08-$DD0B).
 #[derive(Debug)]
-struct Clock {
+pub struct Clock {
     alarm: Registers,
     registers: Registers,
     latch: Option<Registers>,
@@ -53,7 +53,7 @@ impl Clock {
     /// once nudged by a tenths write — with the rest of the clock and
     /// the whole alarm zero, mode Clock, F50, divider 0, no pending
     /// alarm.
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             alarm: Registers::default(),
             registers: Registers::default(),
@@ -70,7 +70,7 @@ impl Clock {
     /// tests (latch set/release). Reads ALWAYS address the live clock,
     /// via the latch — the ALARM is write-only, so any read of a TOD
     /// address reads time regardless of CRB bit 7.
-    fn read(&mut self, offset: u8) -> u8 {
+    pub fn read(&mut self, offset: u8) -> u8 {
         if (offset & 0x03) == Self::HOURS && self.latch.is_none() {
             self.latch = Some(self.registers);
         }
@@ -92,7 +92,7 @@ impl Clock {
 
     /// Write one TOD register. Has side effects: see the CONTRACT in the
     /// tests (hours write stops the clock, tenths write restarts it).
-    fn write(&mut self, offset: u8, value: u8) {
+    pub fn write(&mut self, offset: u8, value: u8) {
         let register = match self.mode {
             ClockMode::Alarm => &mut self.alarm,
             ClockMode::Clock => &mut self.registers,
@@ -119,7 +119,7 @@ impl Clock {
     }
 
     /// CRB bit 7. Pure bank select — never stops/starts/loads anything.
-    fn set_mode(&mut self, mode: ClockMode) {
+    pub fn set_mode(&mut self, mode: ClockMode) {
         self.mode = mode;
     }
 
@@ -127,7 +127,7 @@ impl Clock {
         self.mode
     }
 
-    fn set_frequency(&mut self, frequency: Frequency) {
+    pub fn set_frequency(&mut self, frequency: Frequency) {
         self.frequency = frequency;
     }
 
@@ -141,7 +141,7 @@ impl Clock {
 
     /// One pulse on the TOD input pin, i.e. one power-line cycle
     /// (1/50 s at F50, 1/60 s at F60). See the CONTRACT in the tests.
-    fn tick(&mut self) {
+    pub fn tick(&mut self) {
         if !self.running() {
             return;
         }
@@ -191,12 +191,12 @@ impl Clock {
 
     /// True if the clock has hit the alarm time since the last
     /// acknowledge_alarm(). (Later: ICR bit 2.)
-    fn alarm_pending(&self) -> bool {
+    pub fn alarm_pending(&self) -> bool {
         self.alarm_pending
     }
 
     /// Clear the pending alarm event.
-    fn acknowledge_alarm(&mut self) {
+    pub fn acknowledge_alarm(&mut self) {
         self.alarm_pending = false;
     }
 }
