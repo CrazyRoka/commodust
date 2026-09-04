@@ -35,6 +35,7 @@ pub struct Bus {
     data_port: u8,
     cia1: RefCell<ComplexInterfaceAdapter>,
     cia2: RefCell<ComplexInterfaceAdapter>,
+    color_ram: [u8; COLOR_RAM_SIZE],
 }
 
 // TODO: call tod_pulse in CIA!
@@ -56,6 +57,7 @@ impl Bus {
             data_port: 0b00110111,
             cia1: RefCell::new(ComplexInterfaceAdapter::new()),
             cia2: RefCell::new(ComplexInterfaceAdapter::new()),
+            color_ram: [0; COLOR_RAM_SIZE],
         }
     }
 
@@ -96,6 +98,7 @@ impl Bus {
 
     fn read_io(&self, addr: u16) -> u8 {
         match addr {
+            0xD800..=0xDBFF => self.color_ram_read(addr - 0xD800),
             0xDC00..=0xDCFF => self.cia1.borrow_mut().read((addr & 0x0F) as u8),
             0xDD00..=0xDDFF => self.cia2.borrow_mut().read((addr & 0x0F) as u8),
             _ => 0xFF,
@@ -104,6 +107,7 @@ impl Bus {
 
     fn write_io(&mut self, addr: u16, value: u8) {
         match addr {
+            0xD800..=0xDBFF => self.color_ram_write(addr - 0xD800, value),
             0xDC00..=0xDCFF => self.cia1.borrow_mut().write((addr & 0x0F) as u8, value),
             0xDD00..=0xDDFF => self.cia2.borrow_mut().write((addr & 0x0F) as u8, value),
             _ => {}
@@ -124,6 +128,15 @@ impl Bus {
     /// True if CIA #2 is asserting NMI.
     pub fn nmi(&self) -> bool {
         self.cia2.borrow().irq()
+    }
+
+    pub fn color_ram_read(&self, addr: u16) -> u8 {
+        // TODO: Consider returning random higher nimble or 0xF0
+        self.color_ram[addr as usize] & 0x0F
+    }
+
+    pub fn color_ram_write(&mut self, addr: u16, value: u8) {
+        self.color_ram[addr as usize] = value & 0x0F;
     }
 }
 
@@ -730,79 +743,246 @@ mod tests {
 
     // // ─── Color RAM Tests ───────────────────────────────────────
 
-    // #[test]
-    // fn test_color_ram_write_stores_lower_nybble() {
-    //     let mut bus = make_test_bus();
-    //     set_banking(&mut bus, true, true, true); // I/O visible
+    // ─── Color RAM Tests ───────────────────────────────────────
 
-    //     bus.write(0xD800, 0xFF);
-    //     assert_eq!(bus.read(0xD800) & 0x0F, 0x0F);
+    #[test]
+    fn test_color_ram_write_stores_lower_nybble() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true); // I/O visible
 
-    //     bus.write(0xD800, 0x30);
-    //     assert_eq!(bus.read(0xD800) & 0x0F, 0x00);
+        bus.write(0xD800, 0xFF);
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x0F);
 
-    //     bus.write(0xD800, 0x4A);
-    //     assert_eq!(bus.read(0xD800) & 0x0F, 0x0A);
-    // }
+        bus.write(0xD800, 0x30);
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x00);
 
-    // #[test]
-    // fn test_color_ram_full_range() {
-    //     let mut bus = make_test_bus();
-    //     set_banking(&mut bus, true, true, true);
+        bus.write(0xD800, 0x4A);
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x0A);
+    }
 
-    //     // Write to first and last byte of Color RAM
-    //     bus.write(0xD800, 0x01);
-    //     bus.write(0xDBFF, 0x0E);
+    #[test]
+    fn test_color_ram_full_range() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true);
 
-    //     assert_eq!(bus.read(0xD800) & 0x0F, 0x01);
-    //     assert_eq!(bus.read(0xDBFF) & 0x0F, 0x0E);
-    // }
+        // Write to first and last byte of Color RAM
+        bus.write(0xD800, 0x01);
+        bus.write(0xDBFF, 0x0E);
 
-    // #[test]
-    // fn test_color_ram_not_accessible_when_char_rom_mapped() {
-    //     let mut bus = make_test_bus();
-    //     set_banking(&mut bus, true, true, true); // I/O mode
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x01);
+        assert_eq!(bus.read(0xDBFF) & 0x0F, 0x0E);
+    }
 
-    //     bus.write(0xD800, 0x05);
-    //     assert_eq!(bus.read(0xD800) & 0x0F, 0x05);
+    #[test]
+    fn test_color_ram_not_accessible_when_char_rom_mapped() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true); // I/O mode
 
-    //     // Switch to Character ROM
-    //     set_banking(&mut bus, true, true, false);
+        bus.write(0xD800, 0x05);
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x05);
 
-    //     // $D800 should now read Character ROM, not Color RAM
-    //     // Character ROM at $D800: offset = $D800 - $D000 = $0800
-    //     // rom[CHAR_ROM_OFFSET + 0x0800] = (0x800 & 0xFF) ^ 0xD0 = 0x00 ^ 0xD0 = 0xD0
-    //     assert_eq!(bus.read(0xD800), 0xD0); // Character ROM data
+        // Switch to Character ROM (CHAREN = 0)
+        set_banking(&mut bus, true, true, false);
 
-    //     // Switch back to I/O
-    //     set_banking(&mut bus, true, true, true);
-    //     assert_eq!(bus.read(0xD800) & 0x0F, 0x05); // Color RAM preserved
-    // }
+        // $D800 should now read Character ROM, not Color RAM
+        // Character ROM offset at $D800 = $0800: rom[CHAR_ROM_OFFSET + 0x0800]
+        let expected_char_rom = ((0x0800usize & 0xFF) as u8) ^ 0xD0;
+        assert_eq!(bus.read(0xD800), expected_char_rom);
 
-    // #[test]
-    // fn test_color_ram_direct_access_for_vic() {
-    //     let mut bus = make_test_bus();
+        // Switch back to I/O: Color RAM preserved
+        set_banking(&mut bus, true, true, true);
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x05);
+    }
 
-    //     // VIC-II can always access Color RAM regardless of CPU banking
-    //     bus.color_ram_write(0, 0x0F);
-    //     bus.color_ram_write(512, 0x06);
-    //     bus.color_ram_write(1023, 0x0C);
+    #[test]
+    fn test_color_ram_direct_access_for_vic() {
+        let mut bus = make_test_bus();
 
-    //     assert_eq!(bus.color_ram_read(0), 0x0F);
-    //     assert_eq!(bus.color_ram_read(512), 0x06);
-    //     assert_eq!(bus.color_ram_read(1023), 0x0C);
-    // }
+        // VIC-II directly reads/writes Color RAM regardless of CPU banking
+        bus.color_ram_write(0, 0x0F);
+        bus.color_ram_write(512, 0x06);
+        bus.color_ram_write(1023, 0x0C);
 
-    // #[test]
-    // fn test_color_ram_direct_write_masks_upper_nybble() {
-    //     let mut bus = make_test_bus();
+        assert_eq!(bus.color_ram_read(0), 0x0F);
+        assert_eq!(bus.color_ram_read(512), 0x06);
+        assert_eq!(bus.color_ram_read(1023), 0x0C);
+    }
 
-    //     bus.color_ram_write(0, 0xFF);
-    //     assert_eq!(bus.color_ram_read(0), 0x0F);
+    #[test]
+    fn test_color_ram_direct_write_masks_upper_nybble() {
+        let mut bus = make_test_bus();
 
-    //     bus.color_ram_write(0, 0xF0);
-    //     assert_eq!(bus.color_ram_read(0), 0x00);
-    // }
+        bus.color_ram_write(0, 0xFF);
+        assert_eq!(bus.color_ram_read(0), 0x0F);
+
+        bus.color_ram_write(0, 0xF0);
+        assert_eq!(bus.color_ram_read(0), 0x00);
+
+        bus.color_ram_write(1023, 0x7B);
+        assert_eq!(bus.color_ram_read(1023), 0x0B);
+    }
+
+    #[test]
+    fn test_color_ram_all_16_colors_round_trip() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true);
+
+        for color in 0x00..=0x0F {
+            // Write color with arbitrary noise in upper nibble
+            let write_val = (color << 4) | color;
+            bus.write(0xD800 + color as u16, write_val);
+
+            // CPU read must preserve lower nibble
+            assert_eq!(
+                bus.read(0xD800 + color as u16) & 0x0F,
+                color,
+                "Failed to preserve color 0x{:02X} via CPU read",
+                color
+            );
+
+            // VIC-II direct read must see the exact 4-bit color value
+            assert_eq!(
+                bus.color_ram_read(color as u16),
+                color,
+                "VIC-II failed to read color 0x{:02X}",
+                color
+            );
+        }
+    }
+
+    #[test]
+    fn test_color_ram_fully_decoded_no_mirroring() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true);
+
+        // Color RAM is 1024 bytes with full 10-bit address decoding (A0-A9)
+        bus.write(0xD800, 0x01);
+        bus.write(0xD801, 0x02);
+        bus.write(0xD900, 0x03);
+        bus.write(0xDA00, 0x04);
+        bus.write(0xDBFF, 0x05);
+
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x01);
+        assert_eq!(bus.read(0xD801) & 0x0F, 0x02);
+        assert_eq!(bus.read(0xD900) & 0x0F, 0x03);
+        assert_eq!(bus.read(0xDA00) & 0x0F, 0x04);
+        assert_eq!(bus.read(0xDBFF) & 0x0F, 0x05);
+    }
+
+    #[test]
+    fn test_write_through_to_ram_under_color_ram() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true); // I/O mapped
+
+        // CPU writes 0xA5 to $D800 while I/O is mapped.
+        // Color RAM receives 0x05 (lower 4 bits).
+        // Underlying physical DRAM receives full 0xA5.
+        bus.write(0xD800, 0xA5);
+
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x05);
+        assert_eq!(bus.color_ram_read(0), 0x05);
+
+        // Switch to all-RAM mode (LORAM = 0, HIRAM = 0)
+        set_banking(&mut bus, false, false, true);
+
+        // CPU reading $D800 now accesses physical DRAM
+        assert_eq!(
+            bus.read(0xD800),
+            0xA5,
+            "Physical DRAM did not receive write-through data"
+        );
+    }
+
+    #[test]
+    fn test_writes_when_char_rom_mapped_do_not_affect_color_ram() {
+        let mut bus = make_test_bus();
+
+        // 1. Initialize Color RAM to 0x07 while I/O is visible
+        set_banking(&mut bus, true, true, true);
+        bus.write(0xD850, 0x07);
+        assert_eq!(bus.read(0xD850) & 0x0F, 0x07);
+
+        // 2. Bank in Character ROM (CHAREN = 0)
+        set_banking(&mut bus, true, true, false);
+
+        // Write to $D850 should go to DRAM under Character ROM, NOT Color RAM
+        bus.write(0xD850, 0x0E);
+
+        // 3. Switch back to I/O: Color RAM must still hold 0x07
+        set_banking(&mut bus, true, true, true);
+        assert_eq!(
+            bus.read(0xD850) & 0x0F,
+            0x07,
+            "Color RAM was corrupted while CHAREN was low"
+        );
+        assert_eq!(bus.color_ram_read(0x50), 0x07);
+
+        // 4. Switch to all-RAM mode: verify DRAM received the 0x0E write
+        set_banking(&mut bus, false, false, true);
+        assert_eq!(bus.read(0xD850), 0x0E);
+    }
+
+    #[test]
+    fn test_writes_when_all_ram_mapped_do_not_affect_color_ram() {
+        let mut bus = make_test_bus();
+
+        // 1. Initialize Color RAM with 0x02
+        set_banking(&mut bus, true, true, true);
+        bus.write(0xDA20, 0x02);
+
+        // 2. Switch to All-RAM mode (LORAM = 0, HIRAM = 0)
+        set_banking(&mut bus, false, false, true);
+
+        // Overwrite $DA20 in DRAM
+        bus.write(0xDA20, 0x99);
+        assert_eq!(bus.read(0xDA20), 0x99);
+
+        // 3. Switch back to I/O mode: Color RAM must remain 0x02
+        set_banking(&mut bus, true, true, true);
+        assert_eq!(bus.read(0xDA20) & 0x0F, 0x02);
+        assert_eq!(bus.color_ram_read(0x0220), 0x02);
+    }
+
+    #[test]
+    fn test_color_ram_boundaries_exact() {
+        let mut bus = make_test_bus();
+        set_banking(&mut bus, true, true, true);
+
+        // $D7FF is SID space mirror (unconnected register returns $FF)
+        assert_eq!(bus.read(0xD7FF), 0xFF);
+
+        // $D800 is Color RAM start: write 0x03
+        bus.write(0xD800, 0x03);
+        assert_eq!(bus.read(0xD800) & 0x0F, 0x03);
+
+        // $DBFF is Color RAM end: write 0x0C
+        bus.write(0xDBFF, 0x0C);
+        assert_eq!(bus.read(0xDBFF) & 0x0F, 0x0C);
+
+        // $DC00 is CIA 1 PRA (default unconnected input pins read 0xFF)
+        assert_eq!(bus.read(0xDC00), 0xFF);
+    }
+
+    #[test]
+    fn test_vic_color_ram_read_independent_of_cpu_banking() {
+        let mut bus = make_test_bus();
+
+        // Populate Color RAM at index 0x100 ($D900)
+        bus.color_ram_write(0x100, 0x0E);
+
+        // Verify across all major CPU banking configurations:
+        // Mode 31: Standard I/O
+        set_banking(&mut bus, true, true, true);
+        assert_eq!(bus.color_ram_read(0x100), 0x0E);
+
+        // Mode 27: Character ROM
+        set_banking(&mut bus, true, true, false);
+        assert_eq!(bus.color_ram_read(0x100), 0x0E);
+
+        // Mode 28: All-RAM
+        set_banking(&mut bus, false, false, true);
+        assert_eq!(bus.color_ram_read(0x100), 0x0E);
+    }
 
     // // ─── I/O Block & Mirroring Tests ───────────────────────────
 
@@ -1330,10 +1510,11 @@ mod tests {
         let mut bus = make_test_bus();
         set_banking(&mut bus, true, true, true);
 
-        // $DBFF is Color RAM boundary (reads 0xFF while Color RAM unconnected)
-        assert_eq!(bus.read(0xDBFF), 0xFF);
+        // $DBFF is the last byte of Color RAM: verify it reads/writes Color RAM
+        bus.write(0xDBFF, 0x0A);
+        assert_eq!(bus.read(0xDBFF) & 0x0F, 0x0A);
 
-        // $DC00 is CIA 1 PRA (unconnected input pins read 0xFF)
+        // $DC00 is CIA 1 PRA (default unconnected input pins read 0xFF, not Color RAM)
         assert_eq!(bus.read(0xDC00), 0xFF);
 
         // $DCFF is last byte of CIA 1 mirror (CRB, reset value is 0x00)
