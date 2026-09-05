@@ -1,5 +1,6 @@
 mod raster;
 mod registers;
+mod sequencer;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoStandard {
