@@ -3,6 +3,7 @@ mod border;
 mod raster;
 mod registers;
 mod sequencer;
+mod vic;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoStandard {

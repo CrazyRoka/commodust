@@ -91,40 +91,46 @@ impl Sequencer {
         }
     }
 
-    fn ba(&self) -> bool {
+    pub fn ba(&self) -> bool {
         !self.is_bad_line
     }
 
-    fn is_c_access_cycle(&self) -> bool {
+    pub fn is_c_access_cycle(&self) -> bool {
         self.is_c_access
     }
 
-    fn vc(&self) -> u16 {
+    pub fn vc(&self) -> u16 {
         self.vc
     }
 
-    fn rc(&self) -> u8 {
+    pub fn rc(&self) -> u8 {
         self.rc
     }
 
-    fn vmli(&self) -> u8 {
+    pub fn vmli(&self) -> u8 {
         self.vmli
     }
 
-    fn store_c_access(&mut self, char_code: u8, color: u8) {
+    pub fn store_c_access(&mut self, char_code: u8, color: u8) {
         self.line_buffer[self.vmli as usize] = (char_code as u16) | (((color & 0x0F) as u16) << 8);
     }
 
-    fn current_char_and_color(&self) -> (u8, u8) {
-        let value = self.line_buffer[self.vmli as usize];
+    /// Returns the screen code and color nybble for an explicit display
+    /// column (0..=39) of the current video matrix line.
+    pub fn char_and_color_at(&self, column: u8) -> (u8, u8) {
+        let value = self.line_buffer[(column % 40) as usize];
         ((value & 0xFF) as u8, (value >> 8) as u8)
     }
 
-    fn is_bad_line(&self) -> bool {
+    pub fn current_char_and_color(&self) -> (u8, u8) {
+        self.char_and_color_at(self.vmli)
+    }
+
+    pub fn is_bad_line(&self) -> bool {
         self.is_bad_line
     }
 
-    fn is_display_state(&self) -> bool {
+    pub fn is_display_state(&self) -> bool {
         self.is_display_state
     }
 }
