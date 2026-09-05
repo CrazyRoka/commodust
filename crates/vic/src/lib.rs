@@ -1,3 +1,4 @@
+mod border;
 mod raster;
 mod registers;
 mod sequencer;
