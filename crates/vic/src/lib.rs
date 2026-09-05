@@ -1,3 +1,4 @@
+mod address_generator;
 mod border;
 mod raster;
 mod registers;
