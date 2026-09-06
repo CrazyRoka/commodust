@@ -1,5 +1,6 @@
 use bus::Bus;
 use cpu::{BusOperation, Mos6510};
+use keyboard::C64Key;
 use vic::VideoStandard;
 
 const ROM_BYTES: &[u8] = include_bytes!("../../../roms/c64.bin");
@@ -52,5 +53,13 @@ impl System {
                 self.bus.write(addr, value)
             }
         }
+    }
+
+    pub fn press_key(&mut self, key: &C64Key) {
+        self.bus.keyboard_mut().press_key(key);
+    }
+
+    pub fn release_key(&mut self, key: &C64Key) {
+        self.bus.keyboard_mut().release_key(key);
     }
 }

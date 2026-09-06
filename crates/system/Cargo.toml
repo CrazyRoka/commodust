@@ -7,3 +7,4 @@ edition = "2024"
 cpu = { path = "../cpu" }
 bus = { path = "../bus" }
 vic = { path = "../vic" }
+keyboard = { path = "../keyboard" }

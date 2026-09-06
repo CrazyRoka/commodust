@@ -1,3 +1,4 @@
+use ::keyboard::C64Key;
 use iced::{
     ContentFit, Element, Length, Subscription, Task as Command,
     keyboard::{
@@ -13,7 +14,6 @@ use iced::{
 };
 use std::{
     fmt::Display,
-    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -92,8 +92,8 @@ enum EmuCommand {
     Restart,
     ToggleFpsLimit,
     SetModel(MachineModel),
-    KeyDown(Code),
-    KeyUp(Code),
+    KeyDown(C64Key),
+    KeyUp(C64Key),
 }
 
 // -----------------------------------------------------------------------------
@@ -175,7 +175,7 @@ impl EmulatorApp {
                         if code == Code::F12 {
                             self.unlimited_fps = !self.unlimited_fps;
                             let _ = self.command_tx.send(EmuCommand::ToggleFpsLimit);
-                        } else {
+                        } else if let Some(code) = map_keycode(code) {
                             let _ = self.command_tx.send(EmuCommand::KeyDown(code));
                         }
                     }
@@ -183,7 +183,9 @@ impl EmulatorApp {
                 keyboard::Event::KeyReleased { physical_key, .. } => {
                     if let Physical::Code(code) = physical_key {
                         if code != Code::F12 {
-                            let _ = self.command_tx.send(EmuCommand::KeyUp(code));
+                            if let Some(code) = map_keycode(code) {
+                                let _ = self.command_tx.send(EmuCommand::KeyUp(code));
+                            }
                         }
                     }
                 }
@@ -301,13 +303,11 @@ fn run_emulator_thread(
                         MachineModel::Ntsc => VideoStandard::Ntsc,
                     });
                 }
-                EmuCommand::KeyDown(_code) => {
-                    // TODO: When ready, pass keystroke to CIA #1 keyboard matrix:
-                    // system.bus.press_key(code);
+                EmuCommand::KeyDown(code) => {
+                    system.press_key(&code);
                 }
-                EmuCommand::KeyUp(_code) => {
-                    // TODO: When ready, release key in CIA #1 keyboard matrix:
-                    // system.bus.release_key(code);
+                EmuCommand::KeyUp(code) => {
+                    system.release_key(&code);
                 }
             }
         }
@@ -377,5 +377,80 @@ fn run_emulator_thread(
         } else {
             last_frame_time = Instant::now();
         }
+    }
+}
+
+fn map_keycode(code: Code) -> Option<C64Key> {
+    match code {
+        Code::Enter | Code::NumpadEnter => Some(C64Key::Return),
+        Code::Space => Some(C64Key::Space),
+        Code::Backspace => Some(C64Key::Del),
+        Code::ShiftLeft => Some(C64Key::LeftShift),
+        Code::ShiftRight => Some(C64Key::RightShift),
+        Code::ControlLeft | Code::ControlRight => Some(C64Key::Ctrl),
+        Code::Escape => Some(C64Key::RunStop),
+        Code::Home => Some(C64Key::Home),
+
+        // Letters
+        Code::KeyA => Some(C64Key::A),
+        Code::KeyB => Some(C64Key::B),
+        Code::KeyC => Some(C64Key::C),
+        Code::KeyD => Some(C64Key::D),
+        Code::KeyE => Some(C64Key::E),
+        Code::KeyF => Some(C64Key::F),
+        Code::KeyG => Some(C64Key::G),
+        Code::KeyH => Some(C64Key::H),
+        Code::KeyI => Some(C64Key::I),
+        Code::KeyJ => Some(C64Key::J),
+        Code::KeyK => Some(C64Key::K),
+        Code::KeyL => Some(C64Key::L),
+        Code::KeyM => Some(C64Key::M),
+        Code::KeyN => Some(C64Key::N),
+        Code::KeyO => Some(C64Key::O),
+        Code::KeyP => Some(C64Key::P),
+        Code::KeyQ => Some(C64Key::Q),
+        Code::KeyR => Some(C64Key::R),
+        Code::KeyS => Some(C64Key::S),
+        Code::KeyT => Some(C64Key::T),
+        Code::KeyU => Some(C64Key::U),
+        Code::KeyV => Some(C64Key::V),
+        Code::KeyW => Some(C64Key::W),
+        Code::KeyX => Some(C64Key::X),
+        Code::KeyY => Some(C64Key::Y),
+        Code::KeyZ => Some(C64Key::Z),
+
+        // Digits
+        Code::Digit0 => Some(C64Key::Zero),
+        Code::Digit1 => Some(C64Key::One),
+        Code::Digit2 => Some(C64Key::Two),
+        Code::Digit3 => Some(C64Key::Three),
+        Code::Digit4 => Some(C64Key::Four),
+        Code::Digit5 => Some(C64Key::Five),
+        Code::Digit6 => Some(C64Key::Six),
+        Code::Digit7 => Some(C64Key::Seven),
+        Code::Digit8 => Some(C64Key::Eight),
+        Code::Digit9 => Some(C64Key::Nine),
+
+        // Symbols
+        Code::Equal => Some(C64Key::Equal),
+        Code::Minus => Some(C64Key::Minus),
+        Code::NumpadAdd => Some(C64Key::Plus),
+        Code::Comma => Some(C64Key::Comma),
+        Code::Period => Some(C64Key::Dot),
+        Code::Slash => Some(C64Key::Slash),
+        Code::Semicolon => Some(C64Key::Colon),
+        Code::Quote => Some(C64Key::Semicolon),
+
+        // Function Keys
+        Code::F1 => Some(C64Key::F1),
+        Code::F3 => Some(C64Key::F3),
+        Code::F5 => Some(C64Key::F5),
+        Code::F7 => Some(C64Key::F7),
+
+        // Cursor
+        Code::ArrowUp | Code::ArrowDown => Some(C64Key::CrsrVertical),
+        Code::ArrowLeft | Code::ArrowRight => Some(C64Key::CrsrHorizontal),
+
+        _ => None,
     }
 }

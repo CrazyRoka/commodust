@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
 use cia::ComplexInterfaceAdapter;
+use keyboard::Keyboard;
 use vic::{VicII, VideoStandard};
 
 const COLOR_RAM_SIZE: usize = 0x0400; // 1024 bytes (1K × 4-bit)
@@ -38,6 +39,7 @@ pub struct Bus {
     cia2: RefCell<ComplexInterfaceAdapter>,
     color_ram: [u8; COLOR_RAM_SIZE],
     vic: VicII,
+    keyboard: Keyboard,
 }
 
 // TODO: call tod_pulse in CIA!
@@ -61,6 +63,7 @@ impl Bus {
             cia2: RefCell::new(ComplexInterfaceAdapter::new()),
             color_ram: [0; COLOR_RAM_SIZE],
             vic: VicII::new(standard),
+            keyboard: Keyboard::new(),
         }
     }
 
@@ -103,7 +106,10 @@ impl Bus {
         match addr {
             0xD000..=0xD3FF => self.vic.read((addr & 0x3F) as u8),
             0xD800..=0xDBFF => self.color_ram_read(addr - 0xD800),
-            0xDC00..=0xDCFF => self.cia1.borrow_mut().read((addr & 0x0F) as u8),
+            0xDC00..=0xDCFF => {
+                self.handle_keyboard();
+                self.cia1.borrow_mut().read((addr & 0x0F) as u8)
+            }
             0xDD00..=0xDDFF => self.cia2.borrow_mut().read((addr & 0x0F) as u8),
             _ => 0xFF,
         }
@@ -161,6 +167,20 @@ impl Bus {
 
     pub fn vic(&self) -> &VicII {
         &self.vic
+    }
+
+    pub fn keyboard_mut(&mut self) -> &mut Keyboard {
+        &mut self.keyboard
+    }
+
+    fn handle_keyboard(&self) {
+        let driven_columns = self.cia1.borrow().port_b_driven();
+        let row_pins = self.keyboard.scan_rows(driven_columns);
+        self.cia1.borrow_mut().set_port_a_pins(row_pins);
+
+        let driven_rows = self.cia1.borrow().port_a_driven();
+        let col_pins = self.keyboard.scan_columns(driven_rows);
+        self.cia1.borrow_mut().set_port_b_pins(col_pins);
     }
 }
 
