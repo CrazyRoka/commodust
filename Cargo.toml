@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bus", "crates/cia","crates/cpu", "crates/system", "crates/ui", "crates/vic"]
+members = ["crates/bus", "crates/cia","crates/cpu", "crates/keyboard", "crates/system", "crates/ui", "crates/vic"]
 
 [profile.release-with-debug]
 inherits = "release"
