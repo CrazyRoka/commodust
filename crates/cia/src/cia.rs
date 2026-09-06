@@ -308,7 +308,7 @@ impl ComplexInterfaceAdapter {
     }
 
     /// One pulse on the TOD input pin (one mains cycle at the CRA-bit-2 rate).
-    fn tod_pulse(&mut self) {
+    pub fn tod_pulse(&mut self) {
         self.clock.tick();
         if self.clock.alarm_pending() {
             self.clock.acknowledge_alarm();
@@ -317,16 +317,19 @@ impl ComplexInterfaceAdapter {
     }
 
     /// External pin wiring (keyboard matrix, joysticks, serial bus, VIC bank).
-    fn set_port_a_pins(&mut self, value: u8) {
+    pub fn set_port_a_pins(&mut self, value: u8) {
         self.port_a.set_pins(value);
     }
-    fn set_port_b_pins(&mut self, value: u8) {
+
+    pub fn set_port_b_pins(&mut self, value: u8) {
         self.port_b.set_pins(value);
     }
-    fn port_a_driven(&self) -> u8 {
+
+    pub fn port_a_driven(&self) -> u8 {
         self.port_a.driven_pins()
     }
-    fn port_b_driven(&self) -> u8 {
+
+    pub fn port_b_driven(&self) -> u8 {
         self.port_b.driven_pins()
     }
 }

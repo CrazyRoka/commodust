@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
 use cia::ComplexInterfaceAdapter;
+use vic::{VicII, VideoStandard};
 
 const COLOR_RAM_SIZE: usize = 0x0400; // 1024 bytes (1K × 4-bit)
 
@@ -36,11 +37,12 @@ pub struct Bus {
     cia1: RefCell<ComplexInterfaceAdapter>,
     cia2: RefCell<ComplexInterfaceAdapter>,
     color_ram: [u8; COLOR_RAM_SIZE],
+    vic: VicII,
 }
 
 // TODO: call tod_pulse in CIA!
 impl Bus {
-    pub fn new(rom: &[u8]) -> Self {
+    pub fn new(rom: &[u8], standard: VideoStandard) -> Self {
         assert_eq!(
             rom.len(),
             ROM_SIZE,
@@ -58,6 +60,7 @@ impl Bus {
             cia1: RefCell::new(ComplexInterfaceAdapter::new()),
             cia2: RefCell::new(ComplexInterfaceAdapter::new()),
             color_ram: [0; COLOR_RAM_SIZE],
+            vic: VicII::new(standard),
         }
     }
 
@@ -98,6 +101,7 @@ impl Bus {
 
     fn read_io(&self, addr: u16) -> u8 {
         match addr {
+            0xD000..=0xD3FF => self.vic.read((addr & 0x3F) as u8),
             0xD800..=0xDBFF => self.color_ram_read(addr - 0xD800),
             0xDC00..=0xDCFF => self.cia1.borrow_mut().read((addr & 0x0F) as u8),
             0xDD00..=0xDDFF => self.cia2.borrow_mut().read((addr & 0x0F) as u8),
@@ -107,6 +111,7 @@ impl Bus {
 
     fn write_io(&mut self, addr: u16, value: u8) {
         match addr {
+            0xD000..=0xD3FF => self.vic.write((addr & 0x3F) as u8, value),
             0xD800..=0xDBFF => self.color_ram_write(addr - 0xD800, value),
             0xDC00..=0xDCFF => self.cia1.borrow_mut().write((addr & 0x0F) as u8, value),
             0xDD00..=0xDDFF => self.cia2.borrow_mut().write((addr & 0x0F) as u8, value),
@@ -116,13 +121,20 @@ impl Bus {
 
     /// Advances both CIAs by one φ2 clock cycle.
     pub fn tick(&mut self) {
+        self.vic.tick(
+            (!self.cia2.borrow().port_a_driven()) & 0x03,
+            &self.ram,
+            &self.rom[CHAR_ROM_OFFSET..CHAR_ROM_OFFSET + CHAR_ROM_SIZE],
+            &self.color_ram,
+        );
+
         self.cia1.borrow_mut().tick();
         self.cia2.borrow_mut().tick();
     }
 
     /// True if CIA #1 is asserting IRQ.
     pub fn irq(&self) -> bool {
-        self.cia1.borrow().irq()
+        self.cia1.borrow().irq() || self.vic.irq()
     }
 
     /// True if CIA #2 is asserting NMI.
@@ -137,6 +149,14 @@ impl Bus {
 
     pub fn color_ram_write(&mut self, addr: u16, value: u8) {
         self.color_ram[addr as usize] = value & 0x0F;
+    }
+
+    pub fn ba(&self) -> bool {
+        self.vic.ba()
+    }
+
+    pub fn ram(&self) -> &[u8; RAM_SIZE] {
+        &self.ram
     }
 }
 
@@ -162,7 +182,7 @@ mod tests {
             rom[CHAR_ROM_OFFSET + i] = ((i & 0xFF) as u8) ^ 0xD0;
         }
 
-        Bus::new(&rom)
+        Bus::new(&rom, VideoStandard::Pal)
     }
 
     /// Set LORAM / HIRAM / CHAREN by writing to the 6510 I/O port at $01.
@@ -188,7 +208,7 @@ mod tests {
         for i in 0..ROM_SIZE {
             rom[i] = (i & 0xFF) as u8;
         }
-        let bus = Bus::new(&rom);
+        let bus = Bus::new(&rom, VideoStandard::Pal);
 
         assert_eq!(bus.ram, [0; RAM_SIZE]);
         assert_eq!(bus.rom, rom);
@@ -199,7 +219,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "ROM size should be equal to 20480")]
     fn test_bus_fails_when_rom_size_is_wrong() {
-        Bus::new(&[0; 123]);
+        Bus::new(&[0; 123], VideoStandard::Pal);
     }
 
     #[test]
@@ -254,7 +274,7 @@ mod tests {
         assert_eq!(bus.read(0xE001), 0xE1);
 
         // $D000 should be I/O (no devices connected → $FF)
-        assert_eq!(bus.read(0xD000), 0xFF);
+        assert_eq!(bus.read(0xD000), 0x00);
 
         // $C000 should be RAM
         assert_eq!(bus.read(0xC000), 0x00);
@@ -267,7 +287,7 @@ mod tests {
         set_banking(&mut bus, true, true, true);
 
         assert_eq!(bus.read(0xA000), 0xA0); // BASIC ROM
-        assert_eq!(bus.read(0xD000), 0xFF); // I/O
+        assert_eq!(bus.read(0xD000), 0x00); // I/O
         assert_eq!(bus.read(0xE000), 0xE0); // Kernal ROM
     }
 
@@ -291,7 +311,7 @@ mod tests {
         set_banking(&mut bus, true, false, true);
 
         assert_eq!(bus.read(0xA000), 0xA0); // BASIC ROM
-        assert_eq!(bus.read(0xD000), 0xFF); // I/O
+        assert_eq!(bus.read(0xD000), 0x00); // I/O
         assert_eq!(bus.read(0xE000), 0x00); // RAM (was cleared)
     }
 
@@ -315,7 +335,7 @@ mod tests {
         set_banking(&mut bus, false, true, true);
 
         assert_eq!(bus.read(0xA000), 0x55); // RAM (write-through)
-        assert_eq!(bus.read(0xD000), 0xFF); // I/O
+        assert_eq!(bus.read(0xD000), 0x00); // I/O
         assert_eq!(bus.read(0xE000), 0xE0); // Kernal ROM
     }
 
@@ -391,8 +411,8 @@ mod tests {
             } else if d_io {
                 assert_eq!(
                     bus.read(0xD000),
-                    0xFF,
-                    "mode {}: expected I/O ($FF) at $D000",
+                    0x00,
+                    "mode {}: expected I/O ($00) at $D000",
                     i
                 );
             } else {
@@ -474,9 +494,8 @@ mod tests {
         // Write to a non-Color-RAM I/O address (e.g., VIC-II register area)
         bus.write(0xD000, 0x55);
 
-        // Should NOT be readable as I/O $FF (no device connected)
-        // but should be in RAM underneath
-        assert_eq!(bus.read(0xD000), 0xFF); // I/O still returns $FF
+        // I/O is mapped. Read from VIC-II returns the value
+        assert_eq!(bus.read(0xD000), 0x55);
 
         // Switch to all-RAM
         set_banking(&mut bus, false, false, true);
@@ -596,152 +615,124 @@ mod tests {
     //     assert_eq!(val & 0x20, 0x00, "motor bit should be 0");
     // }
 
-    // // ─── VIC-II Read Path Tests ────────────────────────────────
+    // ---------------------------------------------------------------------
+    // VIC-II Integration Tests in Bus
+    // ---------------------------------------------------------------------
 
-    // #[test]
-    // fn test_vic_read_ram_bank_0() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(0);
+    #[test]
+    fn test_vic_registers_read_and_write_through_bus() {
+        let mut bus = make_test_bus();
 
-    //     // Write to RAM and read via VIC-II
-    //     bus.write(0x0400, 0x42); // screen memory
-    //     assert_eq!(bus.vic_read(0x0400), 0x42);
+        // Write Border Color ($D020) via bus
+        bus.write(0xD020, 0x07); // Yellow
 
-    //     bus.write(0x0002, 0x99);
-    //     assert_eq!(bus.vic_read(0x0002), 0x99);
-    // }
+        // Read back: color registers mask with 0xF0
+        assert_eq!(bus.read(0xD020), 0xF7);
+    }
 
-    // #[test]
-    // fn test_vic_read_ram_bank_1() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(1);
+    #[test]
+    fn test_vic_registers_mirror_across_d000_to_d3ff() {
+        let mut bus = make_test_bus();
 
-    //     bus.write(0x4000, 0x33);
-    //     assert_eq!(bus.vic_read(0x0000), 0x33); // VIC offset 0 = CPU $4000
-    // }
+        // Write Sprite 0 X via mirror at $D040
+        bus.write(0xD040, 0x42);
 
-    // #[test]
-    // fn test_vic_read_ram_bank_2() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(2);
+        // Verify across mirrors and base
+        assert_eq!(bus.read(0xD000), 0x42);
+        assert_eq!(bus.read(0xD080), 0x42);
+        assert_eq!(bus.read(0xD3C0), 0x42);
+    }
 
-    //     bus.write(0x8000, 0x44);
-    //     assert_eq!(bus.vic_read(0x0000), 0x44);
-    // }
+    #[test]
+    fn test_vic_registers_hidden_when_char_rom_mapped() {
+        let mut bus = make_test_bus();
 
-    // #[test]
-    // fn test_vic_read_ram_bank_3() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(3);
+        bus.write(0xD020, 0x05);
+        assert_eq!(bus.read(0xD020), 0xF5);
 
-    //     bus.write(0xC000, 0x55);
-    //     assert_eq!(bus.vic_read(0x0000), 0x55);
-    // }
+        // Clear CHAREN ($01 bit 2) -> $D000-$DFFF maps Character ROM, NOT VIC!
+        set_banking(&mut bus, true, true, false);
 
-    // #[test]
-    // fn test_vic_read_char_rom_overlay_bank_0() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(0);
+        // Should now read Character ROM data
+        assert_ne!(bus.read(0xD020), 0xF5);
 
-    //     // VIC-II sees Character ROM at offset $1000–$1FFF in bank 0
-    //     assert_eq!(bus.vic_read(0x1000), 0xD0); // rom[0x4000] = 0x00 ^ 0xD0
-    //     assert_eq!(bus.vic_read(0x1001), 0xD1);
-    //     assert_eq!(bus.vic_read(0x1FFF), 0xFF ^ 0xD0); // rom[0x4FFF]
-    // }
+        // Restore CHAREN -> VIC registers return intact
+        set_banking(&mut bus, true, true, true);
+        assert_eq!(bus.read(0xD020), 0xF5);
+    }
 
-    // #[test]
-    // fn test_vic_read_char_rom_overlay_bank_2() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(2);
+    #[test]
+    fn test_write_through_to_ram_under_vic_registers() {
+        let mut bus = make_test_bus();
 
-    //     // VIC-II sees Character ROM at offset $1000–$1FFF in bank 2
-    //     assert_eq!(bus.vic_read(0x1000), 0xD0);
-    //     assert_eq!(bus.vic_read(0x1FFF), 0xFF ^ 0xD0);
-    // }
+        // Write to $D000 while I/O is visible
+        bus.write(0xD000, 0x99);
 
-    // #[test]
-    // fn test_vic_read_no_char_rom_overlay_bank_1() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(1);
+        // Switch to all-RAM mode (LORAM=0, HIRAM=0)
+        set_banking(&mut bus, false, false, true);
 
-    //     // Bank 1 does NOT have Character ROM overlay
-    //     // VIC-II should see RAM at $1000–$1FFF (which is CPU $5000–$5FFF)
-    //     bus.write(0x5000, 0x77);
-    //     assert_eq!(bus.vic_read(0x1000), 0x77); // RAM, not Character ROM
-    // }
+        // Physical RAM underneath received the write
+        assert_eq!(bus.read(0xD000), 0x99);
+    }
 
-    // #[test]
-    // fn test_vic_read_no_char_rom_overlay_bank_3() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(3);
+    #[test]
+    fn test_vic_irq_propagates_through_bus_irq() {
+        let mut bus = make_test_bus();
 
-    //     // Bank 3 does NOT have Character ROM overlay
-    //     bus.write(0xD000, 0x88); // CPU $D000 = VIC bank 3 offset $1000
-    //     assert_eq!(bus.vic_read(0x1000), 0x88); // RAM, not Character ROM
-    // }
+        // Set raster compare to line 1 and enable mask
+        bus.write(0xD012, 1);
+        bus.write(0xD011, bus.read(0xD011) & !0x80);
 
-    // #[test]
-    // fn test_vic_read_sees_ram_under_basic_rom() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(2); // VIC bank 2 = $8000–$BFFF
+        // enable raster IRQ mask
+        bus.write(0xD01A, 0x01);
 
-    //     // Write to RAM under BASIC ROM (BASIC ROM is at $A000–$BFFF)
-    //     bus.write(0xA000, 0x66);
+        assert!(!bus.irq());
 
-    //     // CPU sees BASIC ROM
-    //     assert_eq!(bus.read(0xA000), 0xA0);
+        // Tick past line 0 to line 1 (63 cycles)
+        for _ in 0..63 {
+            bus.tick();
+        }
 
-    //     // VIC-II sees RAM
-    //     // VIC bank 2 base = $8000, so VIC offset for $A000 = $2000
-    //     assert_eq!(bus.vic_read(0x2000), 0x66);
-    // }
+        // Bus IRQ line must be asserted
+        assert!(bus.irq(), "VIC IRQ must assert bus.irq()");
 
-    // #[test]
-    // fn test_vic_read_sees_ram_under_kernal_rom() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(3); // VIC bank 3 = $C000–$FFFF
+        // Acknowledge by writing 1 to $D019
+        bus.write(0xD019, 0x01);
+        assert!(!bus.irq());
+    }
 
-    //     // Write to RAM under Kernal ROM
-    //     bus.write(0xE000, 0x55);
+    #[test]
+    fn test_vic_ba_propagates_through_bus_ba() {
+        let mut bus = make_test_bus();
 
-    //     // CPU sees Kernal ROM
-    //     assert_eq!(bus.read(0xE000), 0xE0);
+        // Default YSCROLL is 3. Line 51 is a Bad Line!
+        for _ in 0..51 {
+            for _ in 0..63 {
+                bus.tick();
+            }
+        }
 
-    //     // VIC-II sees RAM
-    //     // VIC bank 3 base = $C000, so VIC offset for $E000 = $2000
-    //     assert_eq!(bus.vic_read(0x2000), 0x55);
-    // }
+        // Advance to cycle 12
+        for _ in 0..12 {
+            bus.tick();
+        }
 
-    // #[test]
-    // fn test_vic_read_below_char_rom_overlay() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(0);
+        // On cycle 11, BA is still high
+        assert!(bus.ba(), "bus.ba() must be true before cycle 12");
 
-    //     // Below $1000, VIC-II sees RAM even in bank 0
-    //     bus.write(0x0800, 0x44);
-    //     assert_eq!(bus.vic_read(0x0800), 0x44);
+        bus.tick();
 
-    //     bus.write(0x0FFF, 0x55);
-    //     assert_eq!(bus.vic_read(0x0FFF), 0x55);
-    // }
+        // On cycle 12 of a Bad Line, BA must drop low on the bus
+        assert!(!bus.ba(), "bus.ba() must be false during Bad Line DMA");
 
-    // #[test]
-    // fn test_vic_read_above_char_rom_overlay() {
-    //     let mut bus = make_test_bus();
-    //     bus.set_vic_bank(0);
+        for _ in 13..55 {
+            bus.tick();
+            assert!(!bus.ba(), "bus.ba() must remain false durin Bad Line DMA");
+        }
 
-    //     // Above $1FFF, VIC-II sees RAM
-    //     bus.write(0x2000, 0x66);
-    //     assert_eq!(bus.vic_read(0x2000), 0x66);
-    // }
-
-    // #[test]
-    // fn test_vic_bank_default_is_zero() {
-    //     let bus = make_test_bus();
-    //     assert_eq!(bus.vic_bank(), 0);
-    // }
-
-    // // ─── Color RAM Tests ───────────────────────────────────────
+        bus.tick();
+        assert!(bus.ba(), "bus.ba() must become true after cycle 55");
+    }
 
     // ─── Color RAM Tests ───────────────────────────────────────
 
@@ -1250,7 +1241,7 @@ mod tests {
         let mut bus = make_test_bus();
 
         // Default: I/O at $D000
-        assert_eq!(bus.read(0xD000), 0xFF);
+        assert_eq!(bus.read(0xD000), 0x00);
 
         // Clear CHAREN → Character ROM at $D000
         bus.write(0x01, 0b00110011); // LORAM=1, HIRAM=1, CHAREN=0
@@ -1260,7 +1251,7 @@ mod tests {
         // Set CHAREN again → I/O at $D000
         bus.write(0x01, 0b00110111);
 
-        assert_eq!(bus.read(0xD000), 0xFF); // I/O
+        assert_eq!(bus.read(0xD000), 0x00); // I/O
     }
 
     #[test]
@@ -1302,7 +1293,7 @@ mod tests {
         assert_eq!(bus.read(0xCFFF), 0x33);
 
         // $D000 is I/O (default)
-        assert_eq!(bus.read(0xD000), 0xFF);
+        assert_eq!(bus.read(0xD000), 0x00);
 
         // Switch to all-RAM
         set_banking(&mut bus, false, false, true);

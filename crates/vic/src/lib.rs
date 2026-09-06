@@ -1,3 +1,5 @@
+pub use vic::VicII;
+
 mod address_generator;
 mod border;
 mod raster;
