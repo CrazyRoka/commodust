@@ -158,6 +158,10 @@ impl Bus {
     pub fn ram(&self) -> &[u8; RAM_SIZE] {
         &self.ram
     }
+
+    pub fn vic(&self) -> &VicII {
+        &self.vic
+    }
 }
 
 #[cfg(test)]
