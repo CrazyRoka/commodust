@@ -29,6 +29,10 @@ impl AddressGenerator {
         self.convert_address(char_base + (screen_code as u16) * 8 + (rc & 7) as u16)
     }
 
+    pub fn bitmap_address(&self, bitmap_base: u16, vc: u16, rc: u8) -> Address {
+        self.convert_address(bitmap_base + 8 * vc + rc as u16)
+    }
+
     pub fn convert_address(&self, addr: u16) -> Address {
         let addr = addr & 0x3FFF;
         if HARDWIRED_CHARACTER_ROM_BANKS.contains(&self.bank)
@@ -916,5 +920,87 @@ mod tests {
             generator.g_access_address(0x1000, 1, 0xFF),
             Address::CharacterRom(0x000F)
         ); // rc&7 == 7
+    }
+
+    #[test]
+    fn bitmap_address_calculation_layout() {
+        let mut ag = AddressGenerator::new();
+        ag.set_bank(0);
+
+        // Base $0000, Column 0 (VC=0), Row scanline 0 (RC=0) -> $0000
+        assert_eq!(ag.bitmap_address(0x0000, 0, 0), Address::Ram(0x0000));
+        // Base $0000, Column 0, Row scanline 7 (RC=7) -> $0007
+        assert_eq!(ag.bitmap_address(0x0000, 0, 7), Address::Ram(0x0007));
+        // Base $0000, Column 1 (VC=1), Row scanline 0 (RC=0) -> $0008
+        assert_eq!(ag.bitmap_address(0x0000, 1, 0), Address::Ram(0x0008));
+        // Base $0000, Column 39 (VC=39), Row scanline 7 (RC=7) -> 39 * 8 + 7 = 319 ($013F)
+        assert_eq!(ag.bitmap_address(0x0000, 39, 7), Address::Ram(0x013F));
+        // Base $0000, Row 1 Column 0 (VC=40), Row scanline 0 (RC=0) -> 40 * 8 = 320 ($0140)
+        assert_eq!(ag.bitmap_address(0x0000, 40, 0), Address::Ram(0x0140));
+
+        // Base $2000 offsets:
+        assert_eq!(ag.bitmap_address(0x2000, 0, 0), Address::Ram(0x2000));
+        assert_eq!(ag.bitmap_address(0x2000, 1, 0), Address::Ram(0x2008));
+        assert_eq!(ag.bitmap_address(0x2000, 40, 0), Address::Ram(0x2140));
+        assert_eq!(ag.bitmap_address(0x2000, 999, 7), Address::Ram(0x3F3F));
+    }
+
+    #[test]
+    fn bitmap_at_0000_in_bank_0_and_2_collides_with_char_rom_overlay() {
+        let mut ag = AddressGenerator::new();
+
+        // In Bank 0, addresses $1000..=$1FFF hit Character ROM overlay
+        ag.set_bank(0);
+
+        // VC = 199, RC = 7: 199 * 8 + 7 = 1599 ($063F) -> RAM
+        assert_eq!(ag.bitmap_address(0x0000, 199, 7), Address::Ram(0x063F));
+
+        // VC = 200, RC = 0: 200 * 8 + 0 = 1600 ($0640) -> RAM
+        assert_eq!(ag.bitmap_address(0x0000, 200, 0), Address::Ram(0x0640));
+
+        // Row group 5 begins at VC = 200... wait: $1000 / 8 = 512 (VC = 512, row 12 col 32)
+        // Offset $1000 in bitmap mode: VC = 512 (512 * 8 = 4096 = $1000)
+        assert_eq!(
+            ag.bitmap_address(0x0000, 512, 0),
+            Address::CharacterRom(0x0000)
+        );
+        assert_eq!(
+            ag.bitmap_address(0x0000, 512, 7),
+            Address::CharacterRom(0x0007)
+        );
+        assert_eq!(
+            ag.bitmap_address(0x0000, 1023, 7),
+            Address::CharacterRom(0x0FFF)
+        );
+
+        // In Bank 2, overlay applies identically:
+        ag.set_bank(2);
+        assert_eq!(
+            ag.bitmap_address(0x0000, 512, 0),
+            Address::CharacterRom(0x0000)
+        );
+
+        // In Bank 1 and Bank 3, NO overlay exists (all RAM):
+        ag.set_bank(1);
+        assert_eq!(ag.bitmap_address(0x0000, 512, 0), Address::Ram(0x5000));
+
+        ag.set_bank(3);
+        assert_eq!(ag.bitmap_address(0x0000, 512, 0), Address::Ram(0xD000));
+    }
+
+    #[test]
+    fn bitmap_at_2000_is_always_in_ram_across_all_banks() {
+        let mut ag = AddressGenerator::new();
+
+        // Base $2000 maps to $2000..=$3FFF inside the VIC bank, safe from the $1000..$1FFF overlay
+        for bank in 0..=3 {
+            ag.set_bank(bank);
+            let phys_base = bank as u16 * 0x4000 + 0x2000;
+            assert_eq!(ag.bitmap_address(0x2000, 0, 0), Address::Ram(phys_base));
+            assert_eq!(
+                ag.bitmap_address(0x2000, 512, 0),
+                Address::Ram(phys_base + 0x1000)
+            );
+        }
     }
 }

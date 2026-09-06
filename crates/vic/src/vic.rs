@@ -79,24 +79,134 @@ impl VicII {
             if self.sequencer.is_display_state() // TODO: should we remove next line?
                 && (DISPLAY_FIRST_CYCLE..=DISPLAY_LAST_CYCLE).contains(&cycle)
             {
-                let (char_code, color) = self
-                    .sequencer
-                    .char_and_color_at(cycle - DISPLAY_FIRST_CYCLE);
-                let glyph = match self.address_generator.g_access_address(
-                    self.registers.char_base(),
-                    char_code,
-                    self.sequencer.rc(),
+                let col = cycle - DISPLAY_FIRST_CYCLE;
+                let (char_code, color) = self.sequencer.char_and_color_at(col);
+                let cell_vc = (self.sequencer.vcbase() + col as u16) & 0x3FF;
+
+                match (
+                    self.registers.bmm(),
+                    self.registers.mcm(),
+                    self.registers.ecm(),
                 ) {
-                    Address::CharacterRom(addr) => char_rom[addr as usize],
-                    Address::Ram(addr) => ram[addr as usize],
-                };
-                let background = self.registers.background_colors(0);
-                for idx in 0..8 {
-                    self.framebuffer[offset + idx as usize] = if (0x80 >> idx) & glyph != 0 {
-                        color
-                    } else {
-                        background
-                    };
+                    (false, false, false) => {
+                        let glyph = match self.address_generator.g_access_address(
+                            self.registers.char_base(),
+                            char_code,
+                            self.sequencer.rc(),
+                        ) {
+                            Address::CharacterRom(addr) => char_rom[addr as usize],
+                            Address::Ram(addr) => ram[addr as usize],
+                        };
+                        let background = self.registers.background_colors(0);
+                        for idx in 0..8 {
+                            self.framebuffer[offset + idx as usize] = if (0x80 >> idx) & glyph != 0
+                            {
+                                color & 0x0F
+                            } else {
+                                background
+                            };
+                        }
+                    }
+                    (false, true, false) => {
+                        let glyph = match self.address_generator.g_access_address(
+                            self.registers.char_base(),
+                            char_code,
+                            self.sequencer.rc(),
+                        ) {
+                            Address::CharacterRom(addr) => char_rom[addr as usize],
+                            Address::Ram(addr) => ram[addr as usize],
+                        };
+
+                        if color & 0x08 != 0 {
+                            for pair in 0..4 {
+                                let result = match (glyph >> (6 - pair * 2)) & 0b11 {
+                                    0b00 => self.registers.background_colors(0),
+                                    0b01 => self.registers.background_colors(1),
+                                    0b10 => self.registers.background_colors(2),
+                                    0b11 => color & 0x07,
+                                    _ => unreachable!("It's impossible to reach this branch"),
+                                };
+                                for idx in (pair * 2)..=(pair * 2 + 1) {
+                                    self.framebuffer[offset + idx as usize] = result;
+                                }
+                            }
+                        } else {
+                            let background = self.registers.background_colors(0);
+                            for idx in 0..8 {
+                                self.framebuffer[offset + idx as usize] =
+                                    if (0x80 >> idx) & glyph != 0 {
+                                        color & 0x07
+                                    } else {
+                                        background
+                                    };
+                            }
+                        }
+                    }
+                    (false, false, true) => {
+                        let glyph = match self.address_generator.g_access_address(
+                            self.registers.char_base(),
+                            char_code & 0x3F,
+                            self.sequencer.rc(),
+                        ) {
+                            Address::CharacterRom(addr) => char_rom[addr as usize],
+                            Address::Ram(addr) => ram[addr as usize],
+                        };
+                        let background = self
+                            .registers
+                            .background_colors((char_code >> 6) as usize & 0x03);
+                        for idx in 0..8 {
+                            self.framebuffer[offset + idx as usize] = if (0x80 >> idx) & glyph != 0
+                            {
+                                color & 0x0F
+                            } else {
+                                background
+                            };
+                        }
+                    }
+                    (true, false, false) => {
+                        let glyph = match self.address_generator.bitmap_address(
+                            self.registers.bitmap_base(),
+                            cell_vc,
+                            self.sequencer.rc(),
+                        ) {
+                            Address::CharacterRom(addr) => char_rom[addr as usize],
+                            Address::Ram(addr) => ram[addr as usize],
+                        };
+                        for idx in 0..8 {
+                            self.framebuffer[offset + idx as usize] = if (0x80 >> idx) & glyph != 0
+                            {
+                                (char_code >> 4) & 0x0F
+                            } else {
+                                char_code & 0x0F
+                            };
+                        }
+                    }
+                    (true, true, false) => {
+                        let glyph = match self.address_generator.bitmap_address(
+                            self.registers.bitmap_base(),
+                            cell_vc,
+                            self.sequencer.rc(),
+                        ) {
+                            Address::CharacterRom(addr) => char_rom[addr as usize],
+                            Address::Ram(addr) => ram[addr as usize],
+                        };
+
+                        for pair in 0..4 {
+                            let result = match (glyph >> (6 - pair * 2)) & 0b11 {
+                                0b00 => self.registers.background_colors(0),
+                                0b01 => (char_code >> 4) & 0x0F,
+                                0b10 => char_code & 0x0F,
+                                0b11 => color & 0x0F,
+                                _ => unreachable!("It's impossible to reach this branch"),
+                            };
+                            for idx in (pair * 2)..=(pair * 2 + 1) {
+                                self.framebuffer[offset + idx as usize] = result;
+                            }
+                        }
+                    }
+                    (_, _, true) => {
+                        self.framebuffer[offset..(offset + 8)].fill(0x00);
+                    }
                 }
             } else {
                 self.framebuffer[offset..offset + 8].fill(self.registers.background_colors(0));
@@ -1413,5 +1523,704 @@ mod tests {
             h.vic.framebuffer().to_vec()
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn standard_bitmap_renders_pixels_from_video_matrix_nibbles() {
+        let mut h = TestHarness::new();
+
+        // 1. Enable Standard Bitmap Mode: BMM=1, MCM=0, ECM=0
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x16, h.vic.read(0x16) & !0x10); // MCM = 0
+
+        // 2. Setup memory pointers ($D018):
+        // Video matrix at $0400 (bits 4-7 = 0x01)
+        // Bitmap at $2000 (bit 3 = 1) -> $D018 = 0x18
+        h.vic.write(0x18, 0x18);
+
+        // 3. Setup Colors for Cell (col 0, row 0):
+        // Video Matrix byte at $0400: High nibble = 2 (Red/FG), Low nibble = 7 (Yellow/BG)
+        h.ram[0x0400] = 0x27;
+
+        // Set decoy values in Color RAM and $D021 to ensure they are NOT used
+        h.color_ram[0] = 0x01; // White
+        h.vic.write(0x21, 0x00); // Black
+        h.vic.write(0x20, 0x0E); // Border Light Blue
+
+        // 4. Setup Bitmap Data:
+        // Top row of cell (col 0, RC 0) is at $2000:
+        // 0b10110001 -> FG, BG, FG, FG, BG, BG, BG, FG
+        h.ram[0x2000] = 0b10110001;
+
+        // 5. Advance beam to line 51 (first display line)
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        // Advance to cycle 16 (display window start)
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        // Render cycle 16 (column 0)
+        h.tick(0);
+
+        let fb = h.vic.framebuffer();
+        let pixel_start = 51 * 504 + 128;
+        let rendered = &fb[pixel_start..pixel_start + 8];
+
+        let expected = [2, 7, 2, 2, 7, 7, 7, 2];
+        assert_eq!(
+            rendered, expected,
+            "Standard bitmap must map bit 1 to VM high nibble and bit 0 to VM low nibble"
+        );
+    }
+
+    #[test]
+    fn standard_bitmap_progresses_through_rc_and_vc() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x18, 0x18); // VM $0400, Bitmap $2000
+
+        h.ram[0x0400] = 0x16; // Column 0: FG=1 (White), BG=6 (Blue)
+        h.ram[0x0401] = 0x35; // Column 1: FG=3 (Cyan), BG=5 (Green)
+
+        // Column 0, scanline 0 (RC 0) at $2000
+        h.ram[0x2000] = 0xFF; // All FG (White)
+        // Column 0, scanline 1 (RC 1) at $2001
+        h.ram[0x2001] = 0x00; // All BG (Blue)
+        // Column 1, scanline 0 (RC 0) at $2008
+        h.ram[0x2008] = 0xAA; // 0b10101010 -> FG, BG alternating
+
+        // Render line 51 (RC = 0)
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // col 0
+        h.tick(0); // col 1
+
+        let l51 = 51 * 504;
+        assert_eq!(
+            &h.vic.framebuffer()[l51 + 128..l51 + 136],
+            &[1u8; 8],
+            "Line 51 Col 0 must be White"
+        );
+        assert_eq!(
+            &h.vic.framebuffer()[l51 + 136..l51 + 144],
+            &[3, 5, 3, 5, 3, 5, 3, 5],
+            "Line 51 Col 1 must be alternating Cyan/Green"
+        );
+
+        // Finish line 51 and run line 52 up to col 0 (RC = 1)
+        for _ in 18..63 {
+            h.tick(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // col 0 on line 52
+
+        let fb = h.vic.framebuffer();
+        let l52 = 52 * 504;
+        assert_eq!(
+            &fb[l52 + 128..l52 + 136],
+            &[6u8; 8],
+            "Line 52 Col 0 must be Blue from address $2001 (RC 1)"
+        );
+    }
+
+    #[test]
+    fn multicolor_bitmap_renders_four_color_sources_with_double_width_pixels() {
+        let mut h = TestHarness::new();
+
+        // 1. Enable Multicolor Bitmap Mode: BMM=1, MCM=1
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x16, h.vic.read(0x16) | 0x10); // MCM = 1
+        h.vic.write(0x18, 0x18); // VM $0400, Bitmap $2000
+
+        // 2. Setup the four color sources:
+        // 00 -> $D021
+        h.vic.write(0x21, 0x00); // 0 (Black)
+        // 01 -> VM high nibble; 10 -> VM low nibble
+        h.ram[0x0400] = 0x25; // 01 = 2 (Red), 10 = 5 (Green)
+        // 11 -> Color RAM
+        h.color_ram[0] = 0x07; // 11 = 7 (Yellow)
+
+        // 3. Setup Bitmap byte at $2000:
+        // Bit pairs: [00, 01, 10, 11] -> 0b00_01_10_11 = 0x1B
+        h.ram[0x2000] = 0b00_01_10_11;
+
+        // 4. Advance beam to line 51, cycle 16
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // render column 0
+
+        let fb = h.vic.framebuffer();
+        let pixel_start = 51 * 504 + 128;
+        let rendered = &fb[pixel_start..pixel_start + 8];
+
+        // Each bit-pair produces 2 adjacent pixels:
+        // pair 0 (00) -> [0, 0]
+        // pair 1 (01) -> [2, 2]
+        // pair 2 (10) -> [5, 5]
+        // pair 3 (11) -> [7, 7]
+        let expected = [0, 0, 2, 2, 5, 5, 7, 7];
+        assert_eq!(
+            rendered, expected,
+            "Multicolor bitmap must expand bit-pairs into double-width pixels using all 4 color sources"
+        );
+    }
+
+    #[test]
+    fn multicolor_bitmap_masks_color_ram_to_low_nibble() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x16, h.vic.read(0x16) | 0x10); // MCM = 1
+        h.vic.write(0x18, 0x18);
+
+        h.ram[0x0400] = 0x00;
+        // High bits in Color RAM must be ignored:
+        h.color_ram[0] = 0xF3; // Color 3 (Cyan) with noisy upper nibble
+        h.ram[0x2000] = 0b11_11_11_11; // All pair '11'
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0);
+
+        let fb = h.vic.framebuffer();
+        let rendered = &fb[51 * 504 + 128..51 * 504 + 136];
+        assert_eq!(rendered, &[3u8; 8], "Color RAM high nibble must be masked");
+    }
+
+    #[test]
+    fn bank_0_bitmap_at_0000_reads_char_rom_for_row_groups_in_overlay() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x16, h.vic.read(0x16) & !0x10); // MCM = 0
+        h.vic.write(0x18, 0x10); // VM $0400, Bitmap $0000
+
+        // Row group 12 (VC = 512, row line 0) is at offset: 512 * 8 = $1000.
+        // In Bank 0, $1000 is inside Character ROM overlay!
+        h.char_rom[0x0000] = 0b10101010; // ROM overlay content at offset 0
+        h.ram[0x1000] = 0xFF; // Decoy in RAM behind ROM overlay
+
+        // Video matrix byte for VC 512:
+        h.ram[0x0400 + 512] = 0x27; // FG=2, BG=7
+
+        // Row 12 starts at line: 51 + (12 * 8) = line 147
+        for _ in 0..147 {
+            h.tick_scanline(0);
+        }
+        // Advance to column 32 (VC = 40 * 12 + 32 = 512): cycle 16 + 32 = cycle 48
+        for _ in 0..48 {
+            h.tick(0);
+        }
+        h.tick(0); // display column 32
+
+        let fb = h.vic.framebuffer();
+        let pixel_start = 147 * 504 + 48 * 8;
+        let rendered = &fb[pixel_start..pixel_start + 8];
+
+        assert_eq!(
+            rendered,
+            &[2, 7, 2, 7, 2, 7, 2, 7],
+            "Bitmap at $0000 in Bank 0 must read from Character ROM at $1000..$1FFF"
+        );
+    }
+
+    #[test]
+    fn bank_1_bitmap_at_0000_reads_ram_at_5000_without_overlay() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x18, 0x10); // VM $0400 (Bank 1: $4400), Bitmap $0000 (Bank 1: $4000)
+
+        // In Bank 1, VIC offset $1000 is physical RAM $5000 (no ROM overlay!)
+        h.ram[0x5000] = 0b11110000;
+        h.char_rom[0x0000] = 0xAA; // Decoy in Character ROM
+        h.ram[0x4400 + 512] = 0x36; // FG=3, BG=6
+
+        // Line 147, column 32 (VC = 512)
+        for _ in 0..147 {
+            h.tick_scanline(1);
+        }
+        for _ in 0..48 {
+            h.tick(1);
+        }
+        h.tick(1);
+
+        let fb = h.vic.framebuffer();
+        let pixel_start = 147 * 504 + 48 * 8;
+        let rendered = &fb[pixel_start..pixel_start + 8];
+
+        assert_eq!(
+            rendered,
+            &[3, 3, 3, 3, 6, 6, 6, 6],
+            "Bank 1 must read physical RAM at $5000 without Character ROM interference"
+        );
+    }
+
+    #[test]
+    fn switching_between_text_and_bitmap_mid_frame() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x18, 0x18); // VM $0400, Charset $2000 / Bitmap $2000
+        h.vic.write(0x21, 6); // BG Blue
+
+        // Setup both Text and Bitmap data at cell (0, 0):
+        h.ram[0x0400] = 0x01; // Text mode: Screen code 1. Bitmap mode: FG=0, BG=1.
+        h.color_ram[0] = 2; // Text mode: Red foreground
+
+        // In Text mode, Screen code 1 at char_base $2000 is at $2008
+        h.ram[0x2008] = 0b11110000;
+        // In Bitmap mode, cell (0, 0) row 0 is at $2000
+        h.ram[0x2000] = 0b00001111;
+
+        // Line 51: Text Mode (BMM = 0)
+        h.vic.write(0x11, h.vic.read(0x11) & !0x20);
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // col 0 text mode
+
+        let fb = h.vic.framebuffer();
+        let l51 = 51 * 504 + 128;
+        assert_eq!(
+            &fb[l51..l51 + 8],
+            &[2, 2, 2, 2, 6, 6, 6, 6],
+            "Line 51 must render text mode glyph"
+        );
+
+        // Switch to Standard Bitmap Mode during line 51:
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20);
+
+        // Advance to line 52 (RC = 1). Bitmap address is $2001.
+        h.ram[0x2001] = 0b11001100;
+        for _ in 17..63 {
+            h.tick(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // col 0 bitmap mode
+
+        let fb = h.vic.framebuffer();
+        let l52 = 52 * 504 + 128;
+        // VM byte $0400 is 0x01: FG=0, BG=1
+        assert_eq!(
+            &fb[l52..l52 + 8],
+            &[0, 0, 1, 1, 0, 0, 1, 1],
+            "Line 52 must render bitmap mode pixels following dynamic mode switch"
+        );
+    }
+
+    #[test]
+    fn csel0_38_column_window_clips_bitmap_mode() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x20, 14); // Border Light Blue
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x16, 0x00); // CSEL=0: 38 columns
+        h.vic.write(0x18, 0x18);
+
+        h.ram[0x0400] = 0x12; // col 0: FG=1, BG=2
+        h.ram[0x0401] = 0x34; // col 1: FG=3, BG=4
+        h.ram[0x2000] = 0xFF;
+        h.ram[0x2008] = 0xFF;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // Cycle 16: must be border in 38-column mode!
+        h.tick(0); // Cycle 17: Column 1 displayed
+
+        let fb = h.vic.framebuffer();
+        let l51 = 51 * 504;
+        for x in 128..136 {
+            assert_eq!(
+                fb[l51 + x],
+                14,
+                "Cycle 16 (Col 0) must be clipped to border color in 38-column bitmap mode"
+            );
+        }
+        assert_eq!(
+            &fb[l51 + 136..l51 + 144],
+            &[3u8; 8],
+            "Cycle 17 (Col 1) must display bitmap graphics"
+        );
+    }
+
+    #[test]
+    fn bad_line_ba_bus_stealing_occurs_in_bitmap_mode() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, (h.vic.read(0x11) | 0x20) & !0x07); // BMM = 1, YSCROLL = 0
+
+        // Line 0x30 is a Bad Line
+        for _ in 0..0x30 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..12 {
+            h.tick(0);
+            assert!(h.vic.ba());
+        }
+        h.tick(0);
+        assert!(!h.vic.ba(), "BA must drop at cycle 12 in bitmap mode");
+
+        for _ in 13..=54 {
+            h.tick(0);
+            assert!(!h.vic.ba());
+        }
+        h.tick(0);
+        assert!(h.vic.ba(), "BA must return high at cycle 55 in bitmap mode");
+    }
+
+    // =========================================================================
+    // MULTICOLOR TEXT MODE (ECM=0, BMM=0, MCM=1)
+    // =========================================================================
+
+    #[test]
+    fn multicolor_text_renders_standard_glyph_when_color_ram_bit3_is_zero() {
+        let mut h = TestHarness::new();
+        // Enable Multicolor Text Mode: BMM=0, MCM=1, ECM=0
+        h.vic.write(0x11, h.vic.read(0x11) & !0x60);
+        h.vic.write(0x16, h.vic.read(0x16) | 0x10);
+
+        h.vic.write(0x21, 6); // Background 0 = Dark Blue (6)
+        h.color_ram[0] = 0x02; // Bit 3 is 0 -> Standard character! Color = Red (2)
+        h.ram[0x0400] = 1; // Screen code 1
+        h.char_rom[8] = 0b10101010;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // display column 0
+
+        let fb = h.vic.framebuffer();
+        let rendered = &fb[51 * 504 + 128..51 * 504 + 136];
+        assert_eq!(
+            rendered,
+            &[2, 6, 2, 6, 2, 6, 2, 6],
+            "Multicolor text with Color RAM bit 3 = 0 must render as standard 8-pixel character"
+        );
+    }
+
+    #[test]
+    fn multicolor_text_renders_multicolor_glyph_when_color_ram_bit3_is_one() {
+        let mut h = TestHarness::new();
+        // Enable Multicolor Text Mode: BMM=0, MCM=1, ECM=0
+        h.vic.write(0x11, h.vic.read(0x11) & !0x60);
+        h.vic.write(0x16, h.vic.read(0x16) | 0x10);
+
+        // Setup the 4 color sources:
+        h.vic.write(0x21, 0); // 00 -> Background 0 = Black (0)
+        h.vic.write(0x22, 2); // 01 -> Background 1 = Red (2)
+        h.vic.write(0x23, 5); // 10 -> Background 2 = Green (5)
+        // Bit 3 is 1 -> Multicolor! Bits 0..2 = 3 (Cyan) -> 11
+        h.color_ram[0] = 0x0B;
+
+        h.ram[0x0400] = 1;
+        // 4 bit pairs: 00, 01, 10, 11
+        h.char_rom[8] = 0b00_01_10_11;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0);
+
+        let fb = h.vic.framebuffer();
+        let rendered = &fb[51 * 504 + 128..51 * 504 + 136];
+        let expected = [0, 0, 2, 2, 5, 5, 3, 3];
+        assert_eq!(
+            rendered, expected,
+            "Multicolor text must expand bit pairs into double-width pixels using BG0..BG2 and Color RAM bits 0..2"
+        );
+    }
+
+    #[test]
+    fn multicolor_text_foreground_color_masks_bit_3() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, h.vic.read(0x11) & !0x60);
+        h.vic.write(0x16, h.vic.read(0x16) | 0x10);
+
+        // Color RAM has 0x0E (bit 3 = 1 -> multicolor; bits 0..2 = 6, Dark Blue)
+        // If bit 3 was not masked, color would be 14 (Light Blue) instead of 6
+        h.color_ram[0] = 0x0E;
+        h.ram[0x0400] = 1;
+        h.char_rom[8] = 0b11_11_11_11; // All pair '11'
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0);
+
+        let fb = h.vic.framebuffer();
+        let rendered = &fb[51 * 504 + 128..51 * 504 + 136];
+        assert_eq!(
+            rendered, &[6u8; 8],
+            "Multicolor text pair 11 must use Color RAM bits 0..2 only"
+        );
+    }
+
+    #[test]
+    fn multicolor_text_adjacent_standard_and_multicolor_characters() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, h.vic.read(0x11) & !0x60);
+        h.vic.write(0x16, h.vic.read(0x16) | 0x10);
+
+        h.vic.write(0x21, 0); // BG 0 = Black
+        h.vic.write(0x22, 2); // BG 1 = Red
+        h.vic.write(0x23, 5); // BG 2 = Green
+
+        // Column 0: Standard character (bit 3 = 0, color = Yellow 7)
+        h.color_ram[0] = 0x07;
+        h.ram[0x0400] = 1;
+        h.char_rom[8] = 0b11110000;
+
+        // Column 1: Multicolor character (bit 3 = 1, FG = Cyan 3)
+        h.color_ram[1] = 0x0B;
+        h.ram[0x0401] = 2;
+        h.char_rom[16] = 0b01_10_11_00;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // col 0
+        h.tick(0); // col 1
+
+        let fb = h.vic.framebuffer();
+        let line = 51 * 504;
+        assert_eq!(
+            &fb[line + 128..line + 136],
+            &[7, 7, 7, 7, 0, 0, 0, 0],
+            "Col 0 must render as standard character"
+        );
+        assert_eq!(
+            &fb[line + 136..line + 144],
+            &[2, 2, 5, 5, 3, 3, 0, 0],
+            "Col 1 must render as multicolor character"
+        );
+    }
+
+    // =========================================================================
+    // EXTENDED COLOR MODE TEXT (ECM=1, BMM=0, MCM=0)
+    // =========================================================================
+
+    #[test]
+    fn ecm_text_selects_background_color_via_screen_code_bits_6_and_7() {
+        let mut h = TestHarness::new();
+        // Enable ECM Text Mode: ECM=1, BMM=0, MCM=0
+        h.vic.write(0x11, (h.vic.read(0x11) | 0x40) & !0x20);
+        h.vic.write(0x16, h.vic.read(0x16) & !0x10);
+
+        // Background color registers 0..3:
+        h.vic.write(0x21, 0); // 00 -> Black
+        h.vic.write(0x22, 2); // 01 -> Red
+        h.vic.write(0x23, 5); // 10 -> Green
+        h.vic.write(0x24, 7); // 11 -> Yellow
+
+        // All 4 columns use White foreground
+        for col in 0..4 {
+            h.color_ram[col] = 1;
+        }
+
+        // Screen codes:
+        // Col 0: %00_000000 -> BG 0 (0)
+        // Col 1: %01_000000 -> BG 1 (2)
+        // Col 2: %10_000000 -> BG 2 (5)
+        // Col 3: %11_000000 -> BG 3 (7)
+        h.ram[0x0400] = 0;
+        h.ram[0x0401] = 64;
+        h.ram[0x0402] = 128;
+        h.ram[0x0403] = 192;
+
+        // All 4 cells display character 0: left 4 pixels FG, right 4 pixels BG
+        h.char_rom[0] = 0b11110000;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        for _ in 0..4 {
+            h.tick(0); // render cols 0..3
+        }
+
+        let fb = h.vic.framebuffer();
+        let line = 51 * 504;
+        assert_eq!(
+            &fb[line + 128..line + 136],
+            &[1, 1, 1, 1, 0, 0, 0, 0],
+            "Col 0 must use BG0 (Black)"
+        );
+        assert_eq!(
+            &fb[line + 136..line + 144],
+            &[1, 1, 1, 1, 2, 2, 2, 2],
+            "Col 1 must use BG1 (Red)"
+        );
+        assert_eq!(
+            &fb[line + 144..line + 152],
+            &[1, 1, 1, 1, 5, 5, 5, 5],
+            "Col 2 must use BG2 (Green)"
+        );
+        assert_eq!(
+            &fb[line + 152..line + 160],
+            &[1, 1, 1, 1, 7, 7, 7, 7],
+            "Col 3 must use BG3 (Yellow)"
+        );
+    }
+
+    #[test]
+    fn ecm_text_restricts_character_set_to_64_characters() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, (h.vic.read(0x11) | 0x40) & !0x20);
+        h.vic.write(0x16, h.vic.read(0x16) & !0x10);
+
+        h.vic.write(0x21, 0); // BG 0 = Black
+        h.vic.write(0x22, 2); // BG 1 = Red
+        h.color_ram[0] = 1; // FG = White
+
+        // Screen code 65 (%01_000001):
+        // Bits 6-7 select BG 1 (Red).
+        // Bits 0-5 select character 1 ('A')!
+        h.ram[0x0400] = 65;
+
+        // Character 1 glyph:
+        h.char_rom[8] = 0b10101010;
+        // Character 65 in ROM (at 65 * 8 = 520) contains decoy data:
+        h.char_rom[520] = 0xFF;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0);
+
+        let fb = h.vic.framebuffer();
+        let rendered = &fb[51 * 504 + 128..51 * 504 + 136];
+        assert_eq!(
+            rendered,
+            &[1, 2, 1, 2, 1, 2, 1, 2],
+            "ECM screen code 65 must wrap to character 1 and use BG 1"
+        );
+    }
+
+    #[test]
+    fn ecm_text_uses_full_4_bit_color_ram_for_foreground() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, (h.vic.read(0x11) | 0x40) & !0x20);
+        h.vic.write(0x16, h.vic.read(0x16) & !0x10);
+
+        h.vic.write(0x21, 0);
+        // Foreground color = Light Blue (14). Bit 3 is 1; in ECM, all 16 colors are legal!
+        h.color_ram[0] = 14;
+        h.ram[0x0400] = 0;
+        h.char_rom[0] = 0xFF;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0);
+
+        let fb = h.vic.framebuffer();
+        assert_eq!(
+            &fb[51 * 504 + 128..51 * 504 + 136],
+            &[14u8; 8],
+            "ECM text allows all 16 colors for foreground"
+        );
+    }
+
+    // =========================================================================
+    // INVALID DISPLAY MODES (ECM + BMM or ECM + MCM)
+    // =========================================================================
+
+    #[test]
+    fn invalid_bitmap_mode_ecm_with_bmm_renders_black_pixels() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x20, 2); // Border = Red
+        // Enable ECM + BMM (Invalid Bitmap mode)
+        h.vic.write(0x11, h.vic.read(0x11) | 0x60); // BMM=1, ECM=1
+        h.vic.write(0x16, h.vic.read(0x16) & !0x10); // MCM=0
+
+        h.ram[0x0400] = 0xFF; // Video matrix
+        h.color_ram[0] = 0x01;
+        h.ram[0x2000] = 0xFF;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // display column 0
+
+        let fb = h.vic.framebuffer();
+        let line = 51 * 504;
+        assert_eq!(
+            &fb[line + 128..line + 136],
+            &[0u8; 8],
+            "Invalid mode ECM+BMM must display black pixels (color 0)"
+        );
+        // Border must remain unaffected
+        assert_eq!(fb[line + 0], 2, "Border must remain normal color");
+    }
+
+    #[test]
+    fn invalid_text_mode_ecm_with_mcm_renders_black_pixels() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x20, 5); // Border = Green
+        // Enable ECM + MCM with BMM=0 (Invalid Text mode)
+        h.vic.write(0x11, (h.vic.read(0x11) | 0x40) & !0x20); // ECM=1, BMM=0
+        h.vic.write(0x16, h.vic.read(0x16) | 0x10); // MCM=1
+
+        h.ram[0x0400] = 1;
+        h.color_ram[0] = 1;
+        h.char_rom[8] = 0xFF;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0);
+
+        let fb = h.vic.framebuffer();
+        let line = 51 * 504;
+        assert_eq!(
+            &fb[line + 128..line + 136],
+            &[0u8; 8],
+            "Invalid mode ECM+MCM must display black pixels (color 0)"
+        );
+        assert_eq!(fb[line + 0], 5, "Border must remain normal color");
     }
 }

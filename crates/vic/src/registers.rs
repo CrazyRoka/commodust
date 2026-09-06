@@ -170,6 +170,10 @@ impl Registers {
         bits as u16 * 0x400
     }
 
+    pub fn bitmap_base(&self) -> u16 {
+        ((self.values[VMCSB] as u16 >> 3) & 1) * 0x2000
+    }
+
     pub fn latch_lightpen(&mut self, x: u8, line: u16) {
         if !self.lightpen_latched {
             self.lightpen_latched = true;
@@ -1711,5 +1715,34 @@ mod tests {
         assert_eq!((r.read(0x13, 0), r.read(0x14, 0)), (0x54, 100));
         r.latch_lightpen(0x11, 200); // still suppressed within the frame
         assert_eq!((r.read(0x13, 0), r.read(0x14, 0)), (0x54, 100));
+    }
+
+    #[test]
+    fn d018_bit3_controls_bitmap_base_address() {
+        let mut r = Registers::new();
+
+        // Bit 3 = 0 -> $0000
+        r.write(0x18, 0x00);
+        assert_eq!(r.bitmap_base(), 0x0000);
+
+        // Bit 3 = 1 -> $2000
+        r.write(0x18, 0x08);
+        assert_eq!(r.bitmap_base(), 0x2000);
+
+        // Bits 1 and 2 (CB11, CB12) must be ignored for bitmap base
+        r.write(0x18, 0x06); // bits 1, 2 set; bit 3 clear
+        assert_eq!(r.bitmap_base(), 0x0000);
+
+        r.write(0x18, 0x0E); // bits 1, 2, 3 set
+        assert_eq!(r.bitmap_base(), 0x2000);
+
+        // Typical C64 configurations
+        r.write(0x18, 0x18); // Screen at $0400, Bitmap at $2000
+        assert_eq!(r.video_matrix_base(), 0x0400);
+        assert_eq!(r.bitmap_base(), 0x2000);
+
+        r.write(0x18, 0x80); // Screen at $2000, Bitmap at $0000
+        assert_eq!(r.video_matrix_base(), 0x2000);
+        assert_eq!(r.bitmap_base(), 0x0000);
     }
 }

@@ -111,6 +111,10 @@ impl Sequencer {
         self.vmli
     }
 
+    pub fn vcbase(&self) -> u16 {
+        self.vcbase
+    }
+
     pub fn store_c_access(&mut self, char_code: u8, color: u8) {
         self.line_buffer[self.vmli as usize] = (char_code as u16) | (((color & 0x0F) as u16) << 8);
     }
