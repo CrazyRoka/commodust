@@ -73,144 +73,147 @@ impl VicII {
 
         let offset = line as usize * self.raster.standard().cycles_per_line() as usize * 8
             + cycle as usize * 8;
-        if self.border_unit.is_border_active() {
-            self.framebuffer[offset..offset + 8].fill(self.registers.border_color());
-        } else {
-            if self.sequencer.is_display_state() // TODO: should we remove next line?
+
+        let dest = offset + self.registers.xscroll() as usize;
+        if self.sequencer.is_display_state() // TODO: should we remove next line?
                 && (DISPLAY_FIRST_CYCLE..=DISPLAY_LAST_CYCLE).contains(&cycle)
-            {
-                let col = cycle - DISPLAY_FIRST_CYCLE;
-                let (char_code, color) = self.sequencer.char_and_color_at(col);
-                let cell_vc = (self.sequencer.vcbase() + col as u16) & 0x3FF;
+        {
+            let col = cycle - DISPLAY_FIRST_CYCLE;
+            if col == 0 && self.registers.xscroll() > 0 {
+                self.framebuffer[offset..dest].fill(self.registers.background_colors(0));
+            }
 
-                match (
-                    self.registers.bmm(),
-                    self.registers.mcm(),
-                    self.registers.ecm(),
-                ) {
-                    (false, false, false) => {
-                        let glyph = match self.address_generator.g_access_address(
-                            self.registers.char_base(),
-                            char_code,
-                            self.sequencer.rc(),
-                        ) {
-                            Address::CharacterRom(addr) => char_rom[addr as usize],
-                            Address::Ram(addr) => ram[addr as usize],
-                        };
-                        let background = self.registers.background_colors(0);
-                        for idx in 0..8 {
-                            self.framebuffer[offset + idx as usize] = if (0x80 >> idx) & glyph != 0
-                            {
-                                color & 0x0F
-                            } else {
-                                background
-                            };
-                        }
-                    }
-                    (false, true, false) => {
-                        let glyph = match self.address_generator.g_access_address(
-                            self.registers.char_base(),
-                            char_code,
-                            self.sequencer.rc(),
-                        ) {
-                            Address::CharacterRom(addr) => char_rom[addr as usize],
-                            Address::Ram(addr) => ram[addr as usize],
-                        };
+            let (char_code, color) = self.sequencer.char_and_color_at(col);
+            let cell_vc = (self.sequencer.vcbase() + col as u16) & 0x3FF;
 
-                        if color & 0x08 != 0 {
-                            for pair in 0..4 {
-                                let result = match (glyph >> (6 - pair * 2)) & 0b11 {
-                                    0b00 => self.registers.background_colors(0),
-                                    0b01 => self.registers.background_colors(1),
-                                    0b10 => self.registers.background_colors(2),
-                                    0b11 => color & 0x07,
-                                    _ => unreachable!("It's impossible to reach this branch"),
-                                };
-                                for idx in (pair * 2)..=(pair * 2 + 1) {
-                                    self.framebuffer[offset + idx as usize] = result;
-                                }
-                            }
+            match (
+                self.registers.bmm(),
+                self.registers.mcm(),
+                self.registers.ecm(),
+            ) {
+                (false, false, false) => {
+                    let glyph = match self.address_generator.g_access_address(
+                        self.registers.char_base(),
+                        char_code,
+                        self.sequencer.rc(),
+                    ) {
+                        Address::CharacterRom(addr) => char_rom[addr as usize],
+                        Address::Ram(addr) => ram[addr as usize],
+                    };
+                    let background = self.registers.background_colors(0);
+                    for idx in 0..8 {
+                        self.framebuffer[dest + idx as usize] = if (0x80 >> idx) & glyph != 0 {
+                            color & 0x0F
                         } else {
-                            let background = self.registers.background_colors(0);
-                            for idx in 0..8 {
-                                self.framebuffer[offset + idx as usize] =
-                                    if (0x80 >> idx) & glyph != 0 {
-                                        color & 0x07
-                                    } else {
-                                        background
-                                    };
-                            }
-                        }
-                    }
-                    (false, false, true) => {
-                        let glyph = match self.address_generator.g_access_address(
-                            self.registers.char_base(),
-                            char_code & 0x3F,
-                            self.sequencer.rc(),
-                        ) {
-                            Address::CharacterRom(addr) => char_rom[addr as usize],
-                            Address::Ram(addr) => ram[addr as usize],
+                            background
                         };
-                        let background = self
-                            .registers
-                            .background_colors((char_code >> 6) as usize & 0x03);
-                        for idx in 0..8 {
-                            self.framebuffer[offset + idx as usize] = if (0x80 >> idx) & glyph != 0
-                            {
-                                color & 0x0F
-                            } else {
-                                background
-                            };
-                        }
                     }
-                    (true, false, false) => {
-                        let glyph = match self.address_generator.bitmap_address(
-                            self.registers.bitmap_base(),
-                            cell_vc,
-                            self.sequencer.rc(),
-                        ) {
-                            Address::CharacterRom(addr) => char_rom[addr as usize],
-                            Address::Ram(addr) => ram[addr as usize],
-                        };
-                        for idx in 0..8 {
-                            self.framebuffer[offset + idx as usize] = if (0x80 >> idx) & glyph != 0
-                            {
-                                (char_code >> 4) & 0x0F
-                            } else {
-                                char_code & 0x0F
-                            };
-                        }
-                    }
-                    (true, true, false) => {
-                        let glyph = match self.address_generator.bitmap_address(
-                            self.registers.bitmap_base(),
-                            cell_vc,
-                            self.sequencer.rc(),
-                        ) {
-                            Address::CharacterRom(addr) => char_rom[addr as usize],
-                            Address::Ram(addr) => ram[addr as usize],
-                        };
+                }
+                (false, true, false) => {
+                    let glyph = match self.address_generator.g_access_address(
+                        self.registers.char_base(),
+                        char_code,
+                        self.sequencer.rc(),
+                    ) {
+                        Address::CharacterRom(addr) => char_rom[addr as usize],
+                        Address::Ram(addr) => ram[addr as usize],
+                    };
 
+                    if color & 0x08 != 0 {
                         for pair in 0..4 {
                             let result = match (glyph >> (6 - pair * 2)) & 0b11 {
                                 0b00 => self.registers.background_colors(0),
-                                0b01 => (char_code >> 4) & 0x0F,
-                                0b10 => char_code & 0x0F,
-                                0b11 => color & 0x0F,
+                                0b01 => self.registers.background_colors(1),
+                                0b10 => self.registers.background_colors(2),
+                                0b11 => color & 0x07,
                                 _ => unreachable!("It's impossible to reach this branch"),
                             };
                             for idx in (pair * 2)..=(pair * 2 + 1) {
-                                self.framebuffer[offset + idx as usize] = result;
+                                self.framebuffer[dest + idx as usize] = result;
                             }
                         }
-                    }
-                    (_, _, true) => {
-                        self.framebuffer[offset..(offset + 8)].fill(0x00);
+                    } else {
+                        let background = self.registers.background_colors(0);
+                        for idx in 0..8 {
+                            self.framebuffer[dest + idx as usize] = if (0x80 >> idx) & glyph != 0 {
+                                color & 0x07
+                            } else {
+                                background
+                            };
+                        }
                     }
                 }
-            } else {
-                self.framebuffer[offset..offset + 8].fill(self.registers.background_colors(0));
+                (false, false, true) => {
+                    let glyph = match self.address_generator.g_access_address(
+                        self.registers.char_base(),
+                        char_code & 0x3F,
+                        self.sequencer.rc(),
+                    ) {
+                        Address::CharacterRom(addr) => char_rom[addr as usize],
+                        Address::Ram(addr) => ram[addr as usize],
+                    };
+                    let background = self
+                        .registers
+                        .background_colors((char_code >> 6) as usize & 0x03);
+                    for idx in 0..8 {
+                        self.framebuffer[dest + idx as usize] = if (0x80 >> idx) & glyph != 0 {
+                            color & 0x0F
+                        } else {
+                            background
+                        };
+                    }
+                }
+                (true, false, false) => {
+                    let glyph = match self.address_generator.bitmap_address(
+                        self.registers.bitmap_base(),
+                        cell_vc,
+                        self.sequencer.rc(),
+                    ) {
+                        Address::CharacterRom(addr) => char_rom[addr as usize],
+                        Address::Ram(addr) => ram[addr as usize],
+                    };
+                    for idx in 0..8 {
+                        self.framebuffer[dest + idx as usize] = if (0x80 >> idx) & glyph != 0 {
+                            (char_code >> 4) & 0x0F
+                        } else {
+                            char_code & 0x0F
+                        };
+                    }
+                }
+                (true, true, false) => {
+                    let glyph = match self.address_generator.bitmap_address(
+                        self.registers.bitmap_base(),
+                        cell_vc,
+                        self.sequencer.rc(),
+                    ) {
+                        Address::CharacterRom(addr) => char_rom[addr as usize],
+                        Address::Ram(addr) => ram[addr as usize],
+                    };
+
+                    for pair in 0..4 {
+                        let result = match (glyph >> (6 - pair * 2)) & 0b11 {
+                            0b00 => self.registers.background_colors(0),
+                            0b01 => (char_code >> 4) & 0x0F,
+                            0b10 => char_code & 0x0F,
+                            0b11 => color & 0x0F,
+                            _ => unreachable!("It's impossible to reach this branch"),
+                        };
+                        for idx in (pair * 2)..=(pair * 2 + 1) {
+                            self.framebuffer[dest + idx as usize] = result;
+                        }
+                    }
+                }
+                (_, _, true) => {
+                    self.framebuffer[dest..(dest + 8)].fill(0x00);
+                }
             }
+        } else {
+            let range = dest..(dest + 8).min(self.framebuffer.len());
+            self.framebuffer[range].fill(self.registers.background_colors(0));
+        }
+
+        if self.border_unit.is_border_active() {
+            self.framebuffer[offset..offset + 8].fill(self.registers.border_color());
         }
 
         self.sequencer
@@ -2222,5 +2225,254 @@ mod tests {
             "Invalid mode ECM+MCM must display black pixels (color 0)"
         );
         assert_eq!(fb[line + 0], 5, "Border must remain normal color");
+    }
+
+    // =========================================================================
+    // HORIZONTAL FINE SCROLLING (XSCROLL)
+    // =========================================================================
+
+    #[test]
+    fn xscroll_shifts_graphics_to_the_right_by_x_pixels() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x20, 14); // Border Light Blue
+        h.vic.write(0x21, 6); // Background Dark Blue
+        h.color_ram[0] = 1; // White
+        h.ram[0x0400] = 1; // Screen code 1
+        h.char_rom[8] = 0b10000000; // First pixel is set
+
+        // Set XSCROLL = 3 (bits 0-2 of $D016)
+        h.vic.write(0x16, 0x08 | 3); // CSEL=1, XSCROLL=3
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // display column 0 (cycle 16)
+
+        let fb = h.vic.framebuffer();
+        let l51 = 51 * 504;
+
+        // Pixels 128..130 must be Background (6) due to XSCROLL shift
+        assert_eq!(
+            &fb[l51 + 128..l51 + 131],
+            &[6, 6, 6],
+            "Pixels before shifted column must be background color"
+        );
+        // Pixel 131 (128 + 3) must be the first pixel of the glyph (White = 1)
+        assert_eq!(
+            fb[l51 + 131],
+            1,
+            "Shifted glyph pixel 0 must appear at 128 + XSCROLL"
+        );
+        // Pixels 132..136 are the remaining background pixels of the glyph
+        assert_eq!(
+            &fb[l51 + 132..l51 + 136],
+            &[6, 6, 6, 6],
+            "Remaining glyph pixels must follow consecutively"
+        );
+    }
+
+    #[test]
+    fn xscroll_shifts_all_values_0_through_7_correctly() {
+        for shift in 0..=7u8 {
+            let mut h = TestHarness::new();
+            h.vic.write(0x21, 0); // Background Black
+            h.color_ram[0] = 7; // Yellow
+            h.ram[0x0400] = 1;
+            h.char_rom[8] = 0b10000000; // Only bit 7 is set
+
+            h.vic.write(0x16, 0x08 | shift); // CSEL=1, XSCROLL=shift
+
+            for _ in 0..=50 {
+                h.tick_scanline(0);
+            }
+            for _ in 0..16 {
+                h.tick(0);
+            }
+            h.tick(0); // cycle 16
+
+            let fb = h.vic.framebuffer();
+            let l51 = 51 * 504;
+
+            // Pixels 128 .. 128 + shift must be Background
+            for px in 0..shift as usize {
+                assert_eq!(
+                    fb[l51 + 128 + px],
+                    0,
+                    "Shift={}: pixel {} must be background",
+                    shift,
+                    128 + px
+                );
+            }
+            // Pixel 128 + shift must be Yellow (7)
+            assert_eq!(
+                fb[l51 + 128 + shift as usize],
+                7,
+                "Shift={}: first glyph pixel must land at 128 + shift",
+                shift
+            );
+        }
+    }
+
+    #[test]
+    fn xscroll_spills_adjacent_columns_contiguously_across_cycle_boundaries() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x21, 0); // Background Black (0)
+        h.color_ram[0] = 1; // Col 0 = White (1)
+        h.color_ram[1] = 2; // Col 1 = Red (2)
+
+        h.ram[0x0400] = 1;
+        h.ram[0x0401] = 2;
+
+        // Solid characters
+        h.char_rom[8] = 0xFF; // Col 0: 8 White pixels
+        h.char_rom[16] = 0xFF; // Col 1: 8 Red pixels
+
+        // XSCROLL = 5
+        h.vic.write(0x16, 0x08 | 5);
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // cycle 16 (Col 0)
+        h.tick(0); // cycle 17 (Col 1)
+
+        let fb = h.vic.framebuffer();
+        let l51 = 51 * 504;
+
+        // 128..133: 5 pixels of background
+        assert_eq!(&fb[l51 + 128..l51 + 133], &[0u8; 5]);
+
+        // 133..141: 8 White pixels of Col 0 (spans 133..135 of cycle 16 and 136..140 of cycle 17)
+        assert_eq!(
+            &fb[l51 + 133..l51 + 141],
+            &[1u8; 8],
+            "Col 0 must span across the cycle boundary without interruption"
+        );
+
+        // 141..149: 8 Red pixels of Col 1 (spans 141..143 of cycle 17 and 144..148 of cycle 18)
+        assert_eq!(
+            &fb[l51 + 141..l51 + 149],
+            &[2u8; 8],
+            "Col 1 must immediately follow Col 0 with no gaps"
+        );
+    }
+
+    #[test]
+    fn xscroll_in_38_column_mode_clips_column_0_behind_left_border() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x20, 14); // Border Light Blue (14)
+        h.vic.write(0x21, 6); // Background Dark Blue (6)
+
+        h.color_ram[0] = 1; // Col 0 = White (1)
+        h.ram[0x0400] = 1;
+        h.char_rom[8] = 0xFF; // Solid 8 pixels White
+
+        // 38-column mode (CSEL=0) with XSCROLL = 4
+        h.vic.write(0x16, 0x00 | 4);
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // cycle 16 (Left border in 38-col mode)
+        h.tick(0); // cycle 17 (First visible column)
+
+        let fb = h.vic.framebuffer();
+        let l51 = 51 * 504;
+
+        // Left border in 38-col mode extends through cycle 16 (pixels 128..=135)
+        for x in 128..136 {
+            assert_eq!(
+                fb[l51 + x],
+                14,
+                "Pixel {x} must be border color in 38-column mode"
+            );
+        }
+
+        // Col 0 starts at 128 + 4 = 132.
+        // Pixels 132..135 were hidden behind the border.
+        // The remaining 4 pixels (136..139) emerge from behind the border as White (1)!
+        assert_eq!(
+            &fb[l51 + 136..l51 + 140],
+            &[1, 1, 1, 1],
+            "The shifted tail of Column 0 must emerge from behind the 38-column left border"
+        );
+    }
+
+    #[test]
+    fn xscroll_right_edge_is_clipped_by_border_in_40_column_mode() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x20, 14); // Border Light Blue (14)
+        h.vic.write(0x21, 0); // Background Black (0)
+
+        h.color_ram[39] = 2; // Col 39 = Red (2)
+        h.ram[0x0400 + 39] = 1;
+        h.char_rom[8] = 0xFF; // Solid Red
+
+        // XSCROLL = 4 in 40-column mode (CSEL=1)
+        h.vic.write(0x16, 0x08 | 4);
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        // Run cycles 0 through 56
+        for _ in 0..=56 {
+            h.tick(0);
+        }
+
+        let fb = h.vic.framebuffer();
+        let l51 = 51 * 504;
+
+        // Col 39 starts at 440 + 4 = 444.
+        // Pixels 444..447 are visible Red (2)
+        assert_eq!(
+            &fb[l51 + 444..l51 + 448],
+            &[2, 2, 2, 2],
+            "First 4 pixels of Col 39 must be visible before right border"
+        );
+
+        // Pixels 448..455 are cycle 56 (Right border in 40-column mode)
+        // Col 39's remaining 4 pixels (448..451) must be overwritten by the border!
+        for x in 448..456 {
+            assert_eq!(fb[l51 + x], 14, "Pixel {x} must be clipped to border color");
+        }
+    }
+
+    #[test]
+    fn xscroll_works_identically_in_standard_bitmap_mode() {
+        let mut h = TestHarness::new();
+        h.vic.write(0x11, h.vic.read(0x11) | 0x20); // BMM = 1
+        h.vic.write(0x18, 0x18); // Bitmap at $2000
+        h.vic.write(0x16, 0x08 | 3); // CSEL=1, XSCROLL=3
+        h.vic.write(0x21, 0);
+
+        h.ram[0x0400] = 0x27; // FG=2 (Red), BG=7 (Yellow)
+        h.ram[0x2000] = 0b10000000;
+
+        for _ in 0..=50 {
+            h.tick_scanline(0);
+        }
+        for _ in 0..16 {
+            h.tick(0);
+        }
+        h.tick(0); // cycle 16
+
+        let fb = h.vic.framebuffer();
+        let l51 = 51 * 504;
+
+        // Pixels 128..130 are Background 0 ($D021 = 0)
+        assert_eq!(&fb[l51 + 128..l51 + 131], &[0, 0, 0]);
+        // Pixel 131 is shifted FG (Red = 2)
+        assert_eq!(fb[l51 + 131], 2);
+        // Pixels 132..136 are cell BG (Yellow = 7)
+        assert_eq!(&fb[l51 + 132..l51 + 136], &[7, 7, 7, 7]);
     }
 }
