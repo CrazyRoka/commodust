@@ -14,11 +14,12 @@ use iced::{
 };
 use std::{
     fmt::Display,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use system::System;
+use system::{Prg, System};
 use vic::VideoStandard;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +90,7 @@ struct SharedState {
 
 // Commands sent from UI -> Emulator Thread
 enum EmuCommand {
+    LoadPrg(PathBuf),
     Restart,
     ToggleFpsLimit,
     SetModel(MachineModel),
@@ -110,6 +112,8 @@ struct EmulatorApp {
 #[derive(Debug, Clone)]
 enum Message {
     Tick,
+    LoadPrgPressed,
+    PrgLoaded(Option<PathBuf>),
     ModelSelected(MachineModel),
     RestartPressed,
     ToggleFpsPressed,
@@ -191,6 +195,23 @@ impl EmulatorApp {
                 }
                 _ => {}
             },
+            Message::LoadPrgPressed => {
+                return Command::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .add_filter("C64 Program (*.prg)", &["prg", "PRG"])
+                            .pick_file()
+                            .await
+                            .map(|handle| handle.path().to_path_buf())
+                    },
+                    Message::PrgLoaded,
+                );
+            }
+            Message::PrgLoaded(Some(path)) => {
+                let _ = self.command_tx.send(EmuCommand::LoadPrg(path));
+            }
+            Message::PrgLoaded(None) => {}
+
             _ => {}
         }
         Command::none()
@@ -219,6 +240,10 @@ impl EmulatorApp {
             )
             .width(Length::Fill),
             Space::new().height(Length::Fixed(20.0)),
+            button(text("Load PRG..."))
+                .width(Length::Fill)
+                .on_press(Message::LoadPrgPressed),
+            Space::new().height(Length::Fixed(10.0)),
             button(text("Restart"))
                 .width(Length::Fill)
                 .on_press(Message::RestartPressed),
@@ -280,6 +305,18 @@ fn run_emulator_thread(
     let mut model = MachineModel::Pal;
     let mut system = System::new(VideoStandard::Pal);
 
+    if let Some(path) = std::env::args().nth(1) {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(prg) = Prg::from_bytes(&bytes) {
+                // Wait 1.5 seconds for Kernal to boot before injecting
+                for _ in 0..(312 * 63 * 75) {
+                    system.tick();
+                }
+                system.load_prg(&prg, true);
+            }
+        }
+    }
+
     let mut unlimited_fps = false;
     let mut frame_count = 0;
     let mut last_fps_update = Instant::now();
@@ -289,6 +326,13 @@ fn run_emulator_thread(
         // Handle UI Commands
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
+                EmuCommand::LoadPrg(path) => {
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        if let Ok(prg) = Prg::from_bytes(&bytes) {
+                            system.load_prg(&prg, true);
+                        }
+                    }
+                }
                 EmuCommand::Restart => {
                     system = System::new(match model {
                         MachineModel::Pal => VideoStandard::Pal,
