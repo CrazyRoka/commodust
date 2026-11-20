@@ -67,7 +67,11 @@ impl System {
 
     pub fn load_prg(&mut self, prg: &Prg, autorun: bool) {
         for (idx, value) in prg.data().iter().enumerate() {
-            self.bus.write(prg.load_address() + idx as u16, *value);
+            if let Some(addr) = prg.load_address().checked_add(idx as u16) {
+                self.bus.ram_mut()[addr as usize] = *value
+            } else {
+                break;
+            }
         }
 
         if prg.load_address() == 0x0801 {
@@ -191,5 +195,38 @@ mod tests {
             1,
             "A single NMI edge must only run the NMI handler once"
         );
+    }
+
+    #[test]
+    fn load_prg_writes_to_ram_without_corrupting_io() {
+        let mut sys = System::new(VideoStandard::Pal);
+
+        // Set VIC-II border color ($D020) to 6 (blue).
+        sys.bus.write(0xD020, 0x06);
+
+        // PRG loading 1 byte (0x00) at $D020.
+        let prg = Prg::from_bytes(&[0x20, 0xD0, 0x00]).unwrap();
+        sys.load_prg(&prg, false);
+
+        assert_eq!(sys.bus.ram()[0xD020], 0x00);
+        assert_eq!(
+            sys.bus.read(0xD020) & 0x0F,
+            0x06,
+            "load_prg must not overwrite hardware I/O registers"
+        );
+    }
+
+    #[test]
+    fn load_prg_does_not_overflow_at_end_of_address_space() {
+        let mut sys = System::new(VideoStandard::Pal);
+        sys.bus.ram_mut()[0x0000] = 0xAA;
+
+        // PRG starting at $FFFE with 3 bytes (3rd byte must not wrap into $0000).
+        let prg = Prg::from_bytes(&[0xFE, 0xFF, 0x11, 0x22, 0x33]).unwrap();
+        sys.load_prg(&prg, false);
+
+        assert_eq!(sys.bus.ram()[0xFFFE], 0x11);
+        assert_eq!(sys.bus.ram()[0xFFFF], 0x22);
+        assert_eq!(sys.bus.ram()[0x0000], 0xAA);
     }
 }

@@ -161,6 +161,10 @@ impl Bus {
         self.vic.ba()
     }
 
+    pub fn ram_mut(&mut self) -> &mut [u8; RAM_SIZE] {
+        &mut self.ram
+    }
+
     pub fn ram(&self) -> &[u8; RAM_SIZE] {
         &self.ram
     }
