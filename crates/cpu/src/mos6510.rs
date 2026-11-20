@@ -1951,8 +1951,8 @@ impl Mos6510 {
         self.step(0xFF)
     }
 
-    pub fn irq(&mut self) {
-        self.pending_irq = true;
+    pub fn set_irq(&mut self, value: bool) {
+        self.pending_irq = value;
     }
 
     pub fn nmi(&mut self) {
@@ -2058,7 +2058,7 @@ mod tests {
         cpu.s = 0xFF;
         cpu.p = 0x00; // I flag clear so IRQ is taken
 
-        cpu.irq();
+        cpu.set_irq(true);
 
         // Cycle 1: Dummy read from PC (PC not incremented)
         assert_read_op(cpu.step(0xFF), 0x1000);
@@ -2092,7 +2092,7 @@ mod tests {
         cpu.s = 0xFF;
         cpu.p = STATUS_REGISTER_INTERRUPT_DISABLE; // I flag set
 
-        cpu.irq();
+        cpu.set_irq(true);
 
         // CPU fetches opcode normally — IRQ not serviced
         assert_read_op(cpu.step(0xFF), 0x1000);
@@ -2107,7 +2107,7 @@ mod tests {
         cpu.s = 0xFF;
         cpu.p = 0x00;
 
-        cpu.irq();
+        cpu.set_irq(true);
 
         cpu.step(0xFF); // Read PC
         cpu.step(0xFF); // Read PC+1
@@ -2125,7 +2125,7 @@ mod tests {
         cpu.s = 0xFF;
         cpu.p = STATUS_REGISTER_DECIMAL_MODE; // D flag set, I flag clear
 
-        cpu.irq();
+        cpu.set_irq(true);
 
         cpu.step(0xFF); // Read PC
         cpu.step(0xFF); // Read PC+1
@@ -2218,7 +2218,7 @@ mod tests {
         cpu.s = 0xFF;
         cpu.p = 0x00;
 
-        cpu.irq();
+        cpu.set_irq(true);
 
         cpu.step(0xFF); // Read PC (0xABCD)
         cpu.step(0xFF); // Read PC+1 (0xABCE)
@@ -2288,7 +2288,7 @@ mod tests {
         assert_read_op(cpu.step(0xFF), 0x1000);
 
         // Trigger NMI mid-instruction (Cycle 1, before the final cycle of NOP)
-        cpu.irq();
+        cpu.set_irq(true);
 
         // Cycle 1 of NOP (0xEA): Dummy read
         assert_read_op(cpu.step(0xEA), 0x1001);
@@ -2305,6 +2305,35 @@ mod tests {
 
         // Cycle 4 of IRQ: Push PC low (0x01) to 0x01FE
         assert_write_op(cpu.step(0xFF), 0x01FE, 0x01);
+    }
+
+    #[test]
+    fn test_irq_mid_instruction_flip() {
+        let mut cpu = Mos6510::new();
+        cpu.pc = 0x1000;
+        cpu.s = 0xFF;
+        cpu.p = 0x00; // Interrupts enabled
+
+        // Cycle 0: Read opcode
+        assert_read_op(cpu.step(0xFF), 0x1000);
+
+        // Trigger NMI mid-instruction (Cycle 1, before the final cycle of NOP)
+        cpu.set_irq(true);
+
+        // Cycle 1 of NOP (0xEA): Dummy read
+        assert_read_op(cpu.step(0xEA), 0x1001);
+
+        cpu.set_irq(false);
+        assert_eq!(cpu.pending_irq, false);
+
+        // Now that the instruction is complete, the IRQ is not handled anymore.
+        // Cycle 0: Read opcode
+        assert_read_op(cpu.step(0xFF), 0x1001);
+        assert_eq!(cpu.pending_irq, false);
+
+        // Cycle 1 of NOP (0xEA): Dummy read
+        assert_read_op(cpu.step(0xEA), 0x1002);
+        assert_eq!(cpu.pending_irq, false);
     }
 
     #[derive(Deserialize)]
