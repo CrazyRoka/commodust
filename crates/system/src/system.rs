@@ -32,9 +32,11 @@ impl System {
     }
 
     pub fn tick(&mut self) {
+        let nmi_prev = self.bus.nmi();
+
         self.bus.tick();
 
-        if self.bus.nmi() {
+        if !nmi_prev && self.bus.nmi() {
             self.cpu.nmi();
         }
         self.cpu.set_irq(self.bus.irq());
@@ -143,6 +145,51 @@ mod tests {
             sys.bus.ram()[0x0400],
             1,
             "A single acknowledged IRQ must only run the ISR once"
+        );
+    }
+
+    #[test]
+    fn nmi_fires_only_once_per_falling_edge() {
+        let mut sys = System::new(VideoStandard::Pal);
+
+        // Map RAM at $E000-$FFFF while keeping I/O at $D000-$DFFF.
+        sys.bus.write(0x0001, 0x35);
+        sys.bus.write(0x0400, 0x00);
+
+        // Main loop at $1000: JMP $1000
+        sys.bus.write(0x1000, 0x4C);
+        sys.bus.write(0x1001, 0x00);
+        sys.bus.write(0x1002, 0x10);
+
+        // NMI handler at $2000: INC $0400; LDA $DD0D; RTI
+        sys.bus.write(0x2000, 0xEE); // INC $0400
+        sys.bus.write(0x2001, 0x00);
+        sys.bus.write(0x2002, 0x04);
+        sys.bus.write(0x2003, 0xAD); // LDA $DD0D (acknowledges CIA #2 NMI)
+        sys.bus.write(0x2004, 0x0D);
+        sys.bus.write(0x2005, 0xDD);
+        sys.bus.write(0x2006, 0x40); // RTI
+
+        // Hardware NMI vector $FFFA/$FFFB -> $2000.
+        sys.bus.write(0xFFFA, 0x00);
+        sys.bus.write(0xFFFB, 0x20);
+
+        sys.cpu.set_pc(0x1000);
+
+        // Trigger a single CIA #2 Timer A one-shot NMI after 16 cycles.
+        sys.bus.write(0xDD04, 0x10);
+        sys.bus.write(0xDD05, 0x00);
+        sys.bus.write(0xDD0D, 0x81); // Enable Timer A NMI
+        sys.bus.write(0xDD0E, 0x09); // Start Timer A, one-shot
+
+        for _ in 0..200 {
+            sys.tick();
+        }
+
+        assert_eq!(
+            sys.bus.ram()[0x0400],
+            1,
+            "A single NMI edge must only run the NMI handler once"
         );
     }
 }
