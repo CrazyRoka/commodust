@@ -67,8 +67,13 @@ impl Bus {
         }
     }
 
+    fn read_data_port(&self) -> u8 {
+        (self.data_port & self.data_direction_register)
+            | (!self.data_direction_register & (CHAREN | LORAM | HIRAM | CASSETTE_SWITCH))
+    }
+
     fn is_io_mapped(&self) -> bool {
-        (self.data_port & CHAREN != 0) && (self.data_port & (LORAM | HIRAM) != 0)
+        (self.read_data_port() & CHAREN != 0) && (self.read_data_port() & (LORAM | HIRAM) != 0)
     }
 
     pub fn write(&mut self, addr: u16, value: u8) {
@@ -87,15 +92,15 @@ impl Bus {
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0x0000 => self.data_direction_register,
-            0x0001 => self.data_port,
-            0xA000..=0xBFFF if self.data_port & LORAM != 0 => {
+            0x0001 => self.read_data_port(),
+            0xA000..=0xBFFF if self.read_data_port() & LORAM != 0 => {
                 self.rom[addr as usize - 0xA000 + BASIC_ROM_OFFSET]
             }
             0xD000..=0xDFFF if self.is_io_mapped() => self.read_io(addr),
-            0xD000..=0xDFFF if self.data_port & (LORAM | HIRAM) != 0 => {
+            0xD000..=0xDFFF if self.read_data_port() & (LORAM | HIRAM) != 0 => {
                 self.rom[addr as usize - 0xD000 + CHAR_ROM_OFFSET]
             }
-            0xE000..=0xFFFF if self.data_port & HIRAM != 0 => {
+            0xE000..=0xFFFF if self.read_data_port() & HIRAM != 0 => {
                 self.rom[addr as usize - 0xE000 + KERNAL_ROM_OFFSET]
             }
             _ => self.ram[addr as usize],
@@ -1607,5 +1612,44 @@ mod tests {
         // Read ICR to acknowledge
         assert_eq!(bus.read(0xDD0D), 0x82);
         assert!(!bus.nmi(), "NMI line must de-assert after reading ICR");
+    }
+
+    #[test]
+    fn test_ddr_inputs_pull_up_banking_and_port_readback() {
+        let mut bus = make_test_bus();
+
+        // Configure all pins as outputs and drive $01 = 0 (all-RAM).
+        bus.write(0x0000, 0xFF);
+        bus.write(0x0001, 0x00);
+        bus.write(0xA000, 0xAA);
+        assert_eq!(bus.read(0xA000), 0xAA);
+
+        // Switch all pins to inputs (DDR = 0): pull-ups must float LORAM/HIRAM/CHAREN/SWITCH high.
+        bus.write(0x0000, 0x00);
+
+        assert_eq!(
+            bus.read(0x0001) & 0x17,
+            0x17,
+            "Input pins with pull-ups must read high even when $01 latch is 0"
+        );
+        assert_ne!(
+            bus.read(0xA000),
+            0xAA,
+            "BASIC ROM must be mapped in when DDR sets banking pins to inputs"
+        );
+    }
+
+    #[test]
+    fn test_ddr_inputs_without_pullups_do_not_expose_output_latch() {
+        let mut bus = make_test_bus();
+
+        // Drive bits 3 and 5 (CASSETTE_DATA_OUT | CASSETTE_MOTOR) high as outputs.
+        bus.write(0x0000, 0xFF);
+        bus.write(0x0001, 0x28);
+        assert_eq!(bus.read(0x0001) & 0x28, 0x28);
+
+        // Switch to inputs: non-pull-up bits must not keep the output latch's 1s.
+        bus.write(0x0000, 0x00);
+        assert_eq!(bus.read(0x0001) & 0x28, 0x00);
     }
 }
