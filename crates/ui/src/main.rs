@@ -308,8 +308,8 @@ fn run_emulator_thread(
     if let Some(path) = std::env::args().nth(1) {
         if let Ok(bytes) = std::fs::read(&path) {
             if let Ok(prg) = Prg::from_bytes(&bytes) {
-                // Wait 1.5 seconds for Kernal to boot before injecting
-                for _ in 0..(312 * 63 * 75) {
+                // Wait 2.5 seconds for Kernal to boot before injecting
+                for _ in 0..(312 * 63 * 125) {
                     system.tick();
                 }
                 system.load_prg(&prg, true);

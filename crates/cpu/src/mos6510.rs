@@ -312,8 +312,8 @@ impl Mos6510 {
             a: 0,
             x: 0,
             y: 0,
-            p: 0,
-            s: 0,
+            p: STATUS_REGISTER_UNUSED | STATUS_REGISTER_INTERRUPT_DISABLE,
+            s: 0xFD,
             pc: 0,
             cycle: 0,
             instruction: Instruction::Ora,
@@ -2334,6 +2334,22 @@ mod tests {
         // Cycle 1 of NOP (0xEA): Dummy read
         assert_read_op(cpu.step(0xEA), 0x1002);
         assert_eq!(cpu.pending_irq, false);
+    }
+
+    #[test]
+    fn test_reset_initializes_status_and_stack_pointer() {
+        let mut cpu = Mos6510::new();
+
+        // Hardware reset sets I (bit 2) and U (bit 5) in P (0x24) and S = 0xFD.
+        assert_eq!(cpu.p, 0x24);
+        assert_eq!(cpu.s, 0xFD);
+
+        // Because I=1 after reset, an active IRQ line must be ignored.
+        cpu.set_pc(0x1000);
+        cpu.set_irq(true);
+        assert_read_op(cpu.step(0xFF), 0x1000);
+        assert_eq!(cpu.pc, 0x1001);
+        assert_eq!(cpu.s, 0xFD);
     }
 
     #[derive(Deserialize)]

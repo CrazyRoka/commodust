@@ -11,6 +11,7 @@ pub struct System {
     cpu: Mos6510,
     pub bus: Bus,
     cpu_data: u8,
+    nmi_prev: bool,
 }
 
 impl System {
@@ -28,17 +29,14 @@ impl System {
             cpu,
             bus,
             cpu_data: 0xFF,
+            nmi_prev: false,
         }
     }
 
     pub fn tick(&mut self) {
-        let nmi_prev = self.bus.nmi();
-
         self.bus.tick();
 
-        if !nmi_prev && self.bus.nmi() {
-            self.cpu.nmi();
-        }
+        self.handle_nmi();
         self.cpu.set_irq(self.bus.irq());
 
         if !self.bus.ba() {
@@ -52,9 +50,10 @@ impl System {
             BusOperation::Read(addr) => self.cpu_data = self.bus.read(addr),
             BusOperation::Write(addr, value) => {
                 self.cpu_data = 0xFF;
-                self.bus.write(addr, value)
+                self.bus.write(addr, value);
             }
         }
+        self.handle_nmi();
     }
 
     pub fn press_key(&mut self, key: &C64Key) {
@@ -75,7 +74,7 @@ impl System {
         }
 
         if prg.load_address() == 0x0801 {
-            let end_address = prg.load_address() + prg.data().len() as u16;
+            let end_address = prg.load_address().wrapping_add(prg.data().len() as u16);
 
             // Low byte to $2D, High byte to $2E
             self.bus.write(0x002D, (end_address & 0xFF) as u8);
@@ -97,6 +96,13 @@ impl System {
             self.bus.write(0x027A, 0x0D); // 'Enter'
             self.bus.write(0x00C6, 4);
         }
+    }
+
+    fn handle_nmi(&mut self) {
+        if !self.nmi_prev && self.bus.nmi() {
+            self.cpu.nmi();
+        }
+        self.nmi_prev = self.bus.nmi();
     }
 }
 
@@ -217,16 +223,180 @@ mod tests {
     }
 
     #[test]
-    fn load_prg_does_not_overflow_at_end_of_address_space() {
+    fn nmi_fires_when_triggered_by_cpu_write_to_dd0d() {
         let mut sys = System::new(VideoStandard::Pal);
-        sys.bus.ram_mut()[0x0000] = 0xAA;
 
-        // PRG starting at $FFFE with 3 bytes (3rd byte must not wrap into $0000).
-        let prg = Prg::from_bytes(&[0xFE, 0xFF, 0x11, 0x22, 0x33]).unwrap();
+        // Map RAM at $E000-$FFFF while keeping I/O at $D000-$DFFF.
+        sys.bus.write(0x0001, 0x35);
+        sys.bus.write(0x0400, 0x00);
+
+        // Program at $1000: LDA #$81; STA $DD0D; JMP $1005
+        sys.bus.write(0x1000, 0xA9); // LDA #$81
+        sys.bus.write(0x1001, 0x81);
+        sys.bus.write(0x1002, 0x8D); // STA $DD0D (unmasks already-pending Timer A flag)
+        sys.bus.write(0x1003, 0x0D);
+        sys.bus.write(0x1004, 0xDD);
+        sys.bus.write(0x1005, 0x4C); // JMP $1005
+        sys.bus.write(0x1006, 0x05);
+        sys.bus.write(0x1007, 0x10);
+
+        // NMI handler at $2000: INC $0400; LDA $DD0D; RTI
+        sys.bus.write(0x2000, 0xEE); // INC $0400
+        sys.bus.write(0x2001, 0x00);
+        sys.bus.write(0x2002, 0x04);
+        sys.bus.write(0x2003, 0xAD); // LDA $DD0D
+        sys.bus.write(0x2004, 0x0D);
+        sys.bus.write(0x2005, 0xDD);
+        sys.bus.write(0x2006, 0x40); // RTI
+
+        // Hardware NMI vector $FFFA/$FFFB -> $2000.
+        sys.bus.write(0xFFFA, 0x00);
+        sys.bus.write(0xFFFB, 0x20);
+        sys.cpu.set_pc(0x1000);
+
+        // Let CIA #2 Timer A expire while masked so its ICR flag is already latched.
+        sys.bus.write(0xDD0D, 0x7F); // Mask all CIA #2 interrupts
+        sys.bus.write(0xDD04, 0x02);
+        sys.bus.write(0xDD05, 0x00);
+        sys.bus.write(0xDD0E, 0x19); // Start + one-shot + force load
+        for _ in 0..10 {
+            sys.bus.tick();
+        }
+        assert!(
+            !sys.bus.nmi(),
+            "NMI line must remain inactive while CIA #2 Timer A is masked"
+        );
+
+        for _ in 0..200 {
+            sys.tick();
+        }
+
+        assert_eq!(
+            sys.bus.ram()[0x0400],
+            1,
+            "CPU write to $DD0D unmasking a pending flag must trigger NMI once"
+        );
+    }
+
+    #[test]
+    fn nmi_does_not_retrigger_while_active_and_retriggers_after_ack() {
+        let mut sys = System::new(VideoStandard::Pal);
+
+        sys.bus.write(0x0001, 0x35);
+        sys.bus.write(0x0400, 0x00);
+
+        // Main loop at $1000: JMP $1000
+        sys.bus.write(0x1000, 0x4C);
+        sys.bus.write(0x1001, 0x00);
+        sys.bus.write(0x1002, 0x10);
+
+        // NMI handler at $2000 intentionally does NOT acknowledge $DD0D: INC $0400; RTI
+        sys.bus.write(0x2000, 0xEE);
+        sys.bus.write(0x2001, 0x00);
+        sys.bus.write(0x2002, 0x04);
+        sys.bus.write(0x2003, 0x40);
+
+        sys.bus.write(0xFFFA, 0x00);
+        sys.bus.write(0xFFFB, 0x20);
+        sys.cpu.set_pc(0x1000);
+
+        // First NMI edge via CIA #2 Timer A.
+        sys.bus.write(0xDD04, 0x08);
+        sys.bus.write(0xDD05, 0x00);
+        sys.bus.write(0xDD0D, 0x81);
+        sys.bus.write(0xDD0E, 0x19);
+
+        for _ in 0..150 {
+            sys.tick();
+        }
+        assert!(sys.bus.nmi(), "Unacknowledged NMI line should stay active");
+        assert_eq!(
+            sys.bus.ram()[0x0400],
+            1,
+            "Holding NMI active without acknowledging must not retrigger"
+        );
+
+        // Acknowledge $DD0D so NMI line releases, tick so System observes the release,
+        // then trigger a second edge.
+        let _ = sys.bus.read(0xDD0D);
+        assert!(!sys.bus.nmi());
+        sys.tick();
+
+        sys.bus.write(0xDD04, 0x08);
+        sys.bus.write(0xDD05, 0x00);
+        sys.bus.write(0xDD0E, 0x19);
+
+        for _ in 0..150 {
+            sys.tick();
+        }
+        assert_eq!(
+            sys.bus.ram()[0x0400],
+            2,
+            "A new falling edge after acknowledging must trigger NMI again"
+        );
+    }
+
+    #[test]
+    fn nmi_retriggers_when_reasserted_immediately_after_ack() {
+        let mut sys = System::new(VideoStandard::Pal);
+
+        sys.bus.write(0x0001, 0x35);
+        sys.bus.write(0x0400, 0x00);
+
+        // Main loop at $1000: JMP $1000
+        sys.bus.write(0x1000, 0x4C);
+        sys.bus.write(0x1001, 0x00);
+        sys.bus.write(0x1002, 0x10);
+
+        // NMI handler at $2000: INC $0400; LDA $DD0D; RTI
+        sys.bus.write(0x2000, 0xEE); // INC $0400
+        sys.bus.write(0x2001, 0x00);
+        sys.bus.write(0x2002, 0x04);
+        sys.bus.write(0x2003, 0xAD); // LDA $DD0D (releases NMI at end of cycle T)
+        sys.bus.write(0x2004, 0x0D);
+        sys.bus.write(0x2005, 0xDD);
+        sys.bus.write(0x2006, 0x40); // RTI
+
+        sys.bus.write(0xFFFA, 0x00);
+        sys.bus.write(0xFFFB, 0x20);
+        sys.cpu.set_pc(0x1000);
+
+        // Continuous CIA #2 Timer A with latch=0 underflows on every bus.tick(),
+        // so on cycle T+1 immediately after LDA $DD0D releases NMI, bus.tick()
+        // re-asserts NMI before the next CPU step.
+        sys.bus.write(0xDD04, 0x00);
+        sys.bus.write(0xDD05, 0x00);
+        sys.bus.write(0xDD0D, 0x81); // Enable Timer A NMI
+        sys.bus.write(0xDD0E, 0x11); // Start + continuous + force load
+
+        for _ in 0..200 {
+            sys.tick();
+        }
+
+        assert!(
+            sys.bus.ram()[0x0400] >= 2,
+            "NMI released by LDA $DD0D and re-asserted on the next bus.tick() must fire again (got {})",
+            sys.bus.ram()[0x0400]
+        );
+    }
+
+    #[test]
+    fn load_prg_basic_filling_to_ffff_does_not_panic() {
+        let mut sys = System::new(VideoStandard::Pal);
+
+        // PRG at $0801 with 0xF7FF bytes fills $0801..=$FFFF (end_address == 0x10000).
+        let mut raw = vec![0x00; 2 + 0xF7FF];
+        raw[0] = 0x01;
+        raw[1] = 0x08;
+        raw[2] = 0xAA;
+        *raw.last_mut().unwrap() = 0xBB;
+
+        let prg = Prg::from_bytes(&raw).unwrap();
         sys.load_prg(&prg, false);
 
-        assert_eq!(sys.bus.ram()[0xFFFE], 0x11);
-        assert_eq!(sys.bus.ram()[0xFFFF], 0x22);
-        assert_eq!(sys.bus.ram()[0x0000], 0xAA);
+        assert_eq!(sys.bus.ram()[0x0801], 0xAA);
+        assert_eq!(sys.bus.ram()[0xFFFF], 0xBB);
+        assert_eq!(sys.bus.ram()[0x002D], 0x00);
+        assert_eq!(sys.bus.ram()[0x002E], 0x00);
     }
 }
